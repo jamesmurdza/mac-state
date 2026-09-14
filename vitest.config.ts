@@ -6,5 +6,7 @@ export default defineConfig({
     setupFiles: ["tests/setup.ts"],
     testTimeout: 180_000,
     hookTimeout: 180_000,
+    // The reservation allows 2 macOS VMs at once; every E2E file creates one, so run files one at a time.
+    fileParallelism: false,
   },
 });

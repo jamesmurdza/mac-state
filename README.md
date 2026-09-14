@@ -1,8 +1,16 @@
 # mac-state
 
 Experiment: drive a [use.computer](https://use.computer) macOS sandbox with AppleScript and
-watch the screen change. Step 1 (this commit) is a plain E2E test, no web app yet:
-create sandbox → screenshot → run an AppleScript block via `osascript` → screenshot.
+watch the screen change. Step 1 is a set of E2E scenarios, no web app yet. Each one:
+create sandbox → screenshot → run an AppleScript block via `osascript` → verify → screenshot.
+
+| Scenario file (`tests/e2e/`) | What it proves |
+|---|---|
+| `gui-textedit` | Launch an app, put text in a document, one window on screen |
+| `gui-safari` | `open location` loads a real page, so the VM has network |
+| `gui-finder-desktop` | Finder scripting creates a file and opens a window on the Desktop |
+| `gui-keystroke` | `activate` never brings an app to the front; System Events `set frontmost` + `keystroke` works, and so does the SDK `keyboard.hotkey` |
+| `gui-dialog` | `display dialog` from an SSH-run script shows on screen and gives up on its own |
 
 ## Setup
 
@@ -46,3 +54,13 @@ See [testing.md](testing.md) for details.
    Allow button is at about (959, 439) on the 1920x1080 display.
 6. **Idle reaping**: `ephemeral: true` sandboxes are deleted about 2 min after the last activity.
    Keep-alive is one-shot in the npm SDK (`sandbox.keepalive()`), so a long-running server needs its own interval.
+7. **`activate` from SSH never makes an app frontmost.** Finder keeps focus, so keystrokes go to
+   Finder. `tell application "System Events" to set frontmost of process "X" to true` fixes it.
+   Scripts that type or press keys must do this first.
+8. **UI scripting is allowed.** System Events `keystroke` works from `osascript` over SSH, so
+   Accessibility permission is already granted. `sandbox.keyboard.hotkey("cmd+n")` works too.
+9. **`display dialog` works from SSH** without `tell application "System Events"`. The dialog
+   belongs to the `osascript` process, which appears in `uiTree()` with one window while it is up.
+   Routing it through System Events instead blocks System Events queries until the dialog closes.
+10. **Network and Finder scripting just work**: Safari loads `https://example.com` in about 2 s,
+    Finder's `make new file at desktop` and `open (path to desktop)` behave as on a normal Mac.
