@@ -18,19 +18,27 @@ jobs:
           fi
 
   e2e:
-    # Needs repo secrets USE_COMPUTER_API_KEY and USE_COMPUTER_RESERVATION_ID (an active reservation).
-    # Without them the job fails on purpose; the suite never skips.
+    # Needs repo secrets USE_COMPUTER_API_KEY, USE_COMPUTER_RESERVATION_ID (an active
+    # reservation) and ANTHROPIC_API_KEY. Without them the job fails on purpose; nothing skips.
+    # Suites run one after another because the reservation allows 2 VMs at once.
     runs-on: ubuntu-latest
     needs: unit
     env:
       USE_COMPUTER_API_KEY: ${{ secrets.USE_COMPUTER_API_KEY }}
       USE_COMPUTER_RESERVATION_ID: ${{ secrets.USE_COMPUTER_RESERVATION_ID }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CI: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm }
       - run: npm ci
+      - run: npm run test:int
       - run: npm run test:e2e
+      - run: npx playwright install --with-deps chromium
+      # The visual baseline is recorded on Windows; Linux renders fonts differently, so the
+      # first Linux run must record its own baseline and commit tests/e2e/web.spec.ts-snapshots/.
+      - run: npx playwright test
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: screenshots, path: test-results/ }

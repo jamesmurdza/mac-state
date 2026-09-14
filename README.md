@@ -1,7 +1,18 @@
 # mac-state
 
 Experiment: drive a [use.computer](https://use.computer) macOS sandbox with AppleScript and
-watch the screen change. Step 1 is a set of E2E scenarios, no web app yet. Each one:
+watch the screen change. A one-page local tool: type what the Mac should do, Claude writes the
+AppleScript, the sandbox runs it, the screenshot refreshes. Not an agent: one prompt, one script, one run.
+
+```bash
+npm start          # http://localhost:3000 — the sandbox is created on the first request
+```
+
+The page shows the live screen (JPEG, refreshed after every run or on demand), the generated
+script, stdout, stderr and the exit code. Ctrl+C deletes the sandbox. Design and plan:
+[docs/specs](docs/specs/2026-09-14-web-app-design.md), [docs/plans](docs/plans/2026-09-14-web-app.md).
+
+Before the web app came a set of sandbox E2E scenarios that establish how the VMs behave. Each one:
 create sandbox → dismiss the screen-recording prompt → screenshot → run an AppleScript block via
 `osascript` → verify → screenshot.
 
@@ -25,13 +36,17 @@ npm install
 ```
 USE_COMPUTER_API_KEY=uc_live_...
 USE_COMPUTER_RESERVATION_ID=...   # an active Mac mini reservation; the code never reserves
+ANTHROPIC_API_KEY=sk-ant-...      # for the web app's AppleScript generation
 ```
 
 ## Run
 
 ```bash
-npm run test:unit   # pure functions, no network
-npm run test:e2e    # real sandboxes, ~3 min, writes test-results/<scenario>/*.jpg
+npm start               # the web app
+npm run test:unit       # pure functions, no network
+npm run test:int        # SandboxSession + the /api/run path with real Claude and a real sandbox
+npm run test:e2e        # sandbox scenarios, ~3 min, writes test-results/<scenario>/*.jpg
+npm run test:e2e:web    # Playwright drives the page against a real server
 ```
 
 See [testing.md](testing.md) for details.
@@ -60,4 +75,10 @@ See [testing.md](testing.md) for details.
 6. **Network and Finder scripting just work**: Safari loads `https://example.com` in about 2 s,
    Finder's `make new file at desktop` and `open (path to desktop)` behave as on a normal Mac.
 7. **Idle reaping**: `ephemeral: true` sandboxes are deleted about 2 min after the last activity.
-   Keep-alive is one-shot in the npm SDK (`sandbox.keepalive()`), so a long-running server needs its own interval.
+   Keep-alive is one-shot in the npm SDK (`sandbox.keepalive()`), so `SandboxSession` runs its own
+   30 s interval and recreates the sandbox when the gateway answers 404 or 410.
+8. **Claude Opus 5 declines "automate this Mac" prompts** under its cyber classifier
+   (`stop_reason: "refusal"`, category `cyber`). The request opts into server-side fallbacks
+   (`fallbacks: "default"` with the `server-side-fallback-2026-07-01` beta), so the API re-runs a
+   declined prompt on the recommended fallback model in the same call. In practice every run so far
+   was served by `claude-opus-4-8`; the page shows which model wrote the script.
