@@ -72,7 +72,7 @@ export function screenshotUrl(baseUrl: string, sandboxId: string, opts: Screensh
  * 30-60 s to transfer (~50 KB/s egress). A JPEG at quality 80 is ~100 KB and
  * arrives in 2-3 s. The Python SDK exposes these params; the npm one does not yet.
  */
-export async function takeScreenshot(sandbox: MacOSSandbox, opts: ScreenshotOptions = {}): Promise<Uint8Array> {
+export async function takeScreenshot(sandbox: MacOSSandbox, opts: ScreenshotOptions = {}): Promise<Uint8Array<ArrayBuffer>> {
   const baseUrl = process.env.USE_COMPUTER_BASE_URL || DEFAULT_BASE_URL;
   const res = await fetch(screenshotUrl(baseUrl, sandbox.sandboxId, opts), {
     headers: { Authorization: `Bearer ${requireEnv("USE_COMPUTER_API_KEY")}` },

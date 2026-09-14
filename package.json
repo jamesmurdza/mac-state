@@ -6,7 +6,10 @@
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:e2e": "vitest run tests/e2e",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "start": "tsx src/server.ts",
+    "test:int": "vitest run tests/integration",
+    "test:e2e:web": "playwright test"
   },
   "keywords": [],
   "author": "",
@@ -16,9 +19,12 @@
   "private": "true",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.125.0",
+    "@hono/node-server": "^2.1.1",
+    "hono": "^4.13.7",
     "use-computer-sdk": "^0.1.13"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@types/node": "^22.20.2",
     "tsx": "^4.23.13",
     "typescript": "^5.9.3",
