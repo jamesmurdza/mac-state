@@ -11,11 +11,9 @@ end tell
 return "ok"
 `;
 const KEYSTROKE = `
-tell application "System Events"
-  set frontmost of process "TextEdit" to true
-  delay 0.5
-  keystroke "n" using command down
-end tell
+tell application "TextEdit" to activate
+delay 0.5
+tell application "System Events" to keystroke "n" using command down
 delay 1
 return "ok"
 `;
@@ -29,13 +27,12 @@ describe("Keystrokes: cmd+N reaches TextEdit via System Events and via the SDK k
     await snap(sandbox(), SCENARIO, "before");
   });
 
-  it("`activate` from an SSH script does not bring the app to the front; Finder stays frontmost", async () => {
-    const textEdit = await processState(sandbox(), "TextEdit");
-    expect(textEdit).toEqual({ visible: true, frontmost: false, windows: 1 });
-    expect((await processState(sandbox(), "Finder")).frontmost).toBe(true);
+  it("with the screen-recording prompt dismissed, `activate` makes TextEdit visible and frontmost", async () => {
+    expect(await processState(sandbox(), "TextEdit")).toEqual({ visible: true, frontmost: true, windows: 1 });
+    expect((await processState(sandbox(), "Finder")).frontmost).toBe(false);
   });
 
-  it("System Events `set frontmost` then `keystroke` opens a second window (Accessibility is granted)", async () => {
+  it("System Events `keystroke` opens a second window (Accessibility is granted)", async () => {
     const result = await runAppleScript(sandbox(), KEYSTROKE);
     expect(result.exitCode).toBe(0);
     expect(result.stderr).toBe("");

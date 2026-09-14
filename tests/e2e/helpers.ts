@@ -1,16 +1,21 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import type { MacOSSandbox } from "use-computer-sdk";
 import { afterAll, beforeAll } from "vitest";
-import { createSandboxFromEnv, takeScreenshot } from "../../src/sandbox.js";
+import { createSandboxFromEnv, dismissScreenRecordingPrompt, takeScreenshot } from "../../src/sandbox.js";
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** One sandbox per test file: created before the first test, deleted after the last. */
-export function useSandbox(): () => MacOSSandbox {
+/**
+ * One sandbox per test file: created before the first test, deleted after the last.
+ * By default the screen-recording prompt that every fresh sandbox shows is dismissed
+ * right after creation so screenshots are clean.
+ */
+export function useSandbox({ dismissPrompt = true } = {}): () => MacOSSandbox {
   let sandbox: MacOSSandbox | undefined;
   beforeAll(async () => {
     sandbox = await createSandboxFromEnv();
     console.log(`sandbox ${sandbox.sandboxId} on ${sandbox.host}`);
+    if (dismissPrompt) console.log(`screen-recording prompt dismissed: ${await dismissScreenRecordingPrompt(sandbox)}`);
   });
   afterAll(async () => {
     await sandbox?.close();

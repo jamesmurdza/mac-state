@@ -2,15 +2,6 @@ import { Computer, type ExecResult, type MacOSSandbox } from "use-computer-sdk";
 import { requireEnv } from "./env.js";
 
 export const SCRIPT_PATH = "/tmp/mac-state.applescript";
-
-/**
- * Apps launched by `activate` from an SSH session start hidden (no windows on
- * screen, dock dot only). Unhiding every hidden foreground app afterwards makes
- * them visible and frontmost. Verified on macOS 15.4.1 in use.computer VMs.
- */
-export const UNHIDE_SCRIPT =
-  'tell application "System Events" to set visible of (every process whose visible is false and background only is false) to true';
-
 const DEFAULT_BASE_URL = "https://api.use.computer";
 
 export interface ScreenshotOptions {
@@ -23,6 +14,7 @@ export interface ScreenshotOptions {
 /**
  * Create a macOS sandbox on the already-reserved Mac.
  * Reads USE_COMPUTER_API_KEY and USE_COMPUTER_RESERVATION_ID; never reserves.
+ * Call dismissScreenRecordingPrompt() on the result before driving the GUI.
  */
 export async function createSandboxFromEnv(): Promise<MacOSSandbox> {
   const apiKey = requireEnv("USE_COMPUTER_API_KEY");
@@ -31,15 +23,36 @@ export async function createSandboxFromEnv(): Promise<MacOSSandbox> {
   return computer.create({ type: "macos", reservationId });
 }
 
-/** Shell command that runs the uploaded script, unhides what it launched, and keeps the script's exit code. */
-export function appleScriptCommand(scriptPath: string): string {
-  return `osascript ${scriptPath}; rc=$?; osascript -e '${UNHIDE_SCRIPT}' >/dev/null 2>&1; exit $rc`;
+/**
+ * Every fresh sandbox shows a macOS prompt ("bash" is requesting to bypass the system
+ * private window picker...) owned by UserNotificationCenter, mid-screen. While it is up,
+ * apps launched by AppleScript `activate` stay hidden and never become frontmost,
+ * System Events keystrokes go to Finder, and the prompt lands in every screenshot.
+ * Clicking its Allow button through System Events fixes all of that for the life of
+ * the sandbox. Returns true when a prompt was dismissed, false when there was none.
+ */
+export const DISMISS_PROMPT_SCRIPT = `
+tell application "System Events"
+  if not (exists process "UserNotificationCenter") then return "absent"
+  tell process "UserNotificationCenter"
+    if (count of windows) is 0 then return "absent"
+    if not (exists button "Allow" of window 1) then return "absent"
+    click button "Allow" of window 1
+  end tell
+end tell
+return "dismissed"
+`;
+
+export async function dismissScreenRecordingPrompt(sandbox: MacOSSandbox): Promise<boolean> {
+  const result = await sandbox.execSsh(`osascript -e '${DISMISS_PROMPT_SCRIPT.trim()}'`);
+  if (result.exitCode !== 0) throw new Error(`Dismissing the screen-recording prompt failed: ${result.stderr || result.stdout}`);
+  return result.stdout.trim() === "dismissed";
 }
 
 /** Upload an AppleScript block to the sandbox and run it with osascript. */
 export async function runAppleScript(sandbox: MacOSSandbox, script: string): Promise<ExecResult> {
   await sandbox.upload(new TextEncoder().encode(script), SCRIPT_PATH);
-  return sandbox.execSsh(appleScriptCommand(SCRIPT_PATH));
+  return sandbox.execSsh(`osascript ${SCRIPT_PATH}`);
 }
 
 /** URL of the gateway's compressed-screenshot endpoint with JPEG parameters. */

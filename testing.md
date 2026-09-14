@@ -18,10 +18,11 @@ Location: `tests/unit/` — pure functions only, no network.
 ### E2E Tests (real sandbox)
 Command: `npm run test:e2e`
 Location: `tests/e2e/` — one file per scenario (`gui-*.e2e.test.ts`), shared helpers in `tests/e2e/helpers.ts`.
-Each file creates its own sandbox on the reservation (`useSandbox()`), screenshots before and after
-into `test-results/<scenario>/`, verifies through System Events or `uiTree()`, and deletes the sandbox.
+Each file creates its own sandbox on the reservation (`useSandbox()`), dismisses the screen-recording
+prompt, screenshots before and after into `test-results/<scenario>/`, verifies through System Events
+or `uiTree()`, and deletes the sandbox. Pass `useSandbox({ dismissPrompt: false })` to keep the prompt.
 Files run serially (`fileParallelism: false`) because the reservation allows 2 VMs at once.
-Whole suite: 5 files, 7 tests, about 2.5 min. Missing env vars make the tests FAIL (never skip).
+Whole suite: 6 files, 10 tests, about 3 min. Missing env vars make the tests FAIL (never skip).
 
 ### Everything
 Command: `npm test` (also run `npm run typecheck`)
