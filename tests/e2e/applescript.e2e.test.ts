@@ -7,8 +7,8 @@ import { createSandboxFromEnv, runAppleScript, takeScreenshot } from "../../src/
 const SCRIPT = `
 tell application "TextEdit"
   activate
-  set d to make new document
-  set text of d to "hello from mac-state"
+  if (count of documents) is 0 then make new document
+  set text of front document to "hello from mac-state"
 end tell
 return "textedit-ready"
 `;
@@ -46,7 +46,7 @@ describe("AppleScript on a use.computer macOS sandbox", () => {
       `osascript -e 'tell application "System Events" to tell process "TextEdit" to get {visible, count of windows}'`,
     );
     console.log("TextEdit {visible, windows}:", state.stdout.trim());
-    expect(state.stdout.trim()).toMatch(/^true, [1-9]/);
+    expect(state.stdout.trim()).toBe("true, 1");
 
     const after = await timed("screenshot after", () => takeScreenshot(sandbox));
     expect(isJpeg(after)).toBe(true);
