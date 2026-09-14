@@ -21,13 +21,14 @@ Location: `tests/unit/` — pure functions and route validation through `app.req
 Command: `npm run test:int`
 Location: `tests/integration/`
 - `session.int.test.ts` — `SandboxSession` reuses one sandbox and recreates it after an out-of-band delete.
-- `run.int.test.ts` — `POST /api/run` through `app.request()`: Claude writes the script, the sandbox runs it, TextEdit shows the text, `/api/screenshot` returns a JPEG. About 20 s.
+- `run.int.test.ts` — `POST /api/run` through `app.request()`: Claude writes the script, the sandbox runs it, TextEdit shows the text, `/api/status` reports the sandbox and VNC URL. About 20 s.
 
 ### E2E Tests (Playwright, the web page)
 Command: `npm run test:e2e:web` (first time on a new OS: `npx playwright test --update-snapshots`)
 Setup: `npx playwright install chromium`
 Base URL: `http://localhost:3000` — `playwright.config.ts` starts `npx tsx src/server.ts` itself.
 Location: `tests/e2e/web.spec.ts`; visual baseline in `tests/e2e/web.spec.ts-snapshots/` (live regions masked).
+The spec reaches into the cross-origin noVNC iframe with `frameLocator("#vnc")` and waits for its `#status` to read "Connected".
 
 ### Sandbox Scenarios (real sandbox, vitest)
 Command: `npm run test:e2e`

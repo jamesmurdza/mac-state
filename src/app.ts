@@ -1,7 +1,7 @@
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import type { Generation } from "./llm.js";
-import { runAppleScript, takeScreenshot } from "./sandbox.js";
+import { runAppleScript } from "./sandbox.js";
 import type { SandboxSession } from "./session.js";
 
 export interface AppDeps {
@@ -20,14 +20,11 @@ function promptFrom(body: unknown): string {
 export function createApp({ session, generate }: AppDeps): Hono {
   const app = new Hono();
 
+  // The page embeds the gateway's noVNC viewer at vncUrl for a live view. The URL carries
+  // the API key as its token, which is acceptable for a localhost tool only.
   app.get("/api/status", async (c) => {
     const s = await session.get();
     return c.json({ sandboxId: s.sandboxId, host: s.host, vncUrl: s.vncUrl });
-  });
-
-  app.get("/api/screenshot", async (c) => {
-    const jpeg = await session.use((s) => takeScreenshot(s));
-    return c.body(jpeg, 200, { "Content-Type": "image/jpeg", "Cache-Control": "no-store" });
   });
 
   app.post("/api/run", async (c) => {

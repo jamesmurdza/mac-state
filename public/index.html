@@ -35,8 +35,9 @@
     background: #060605; border: 1px solid var(--line-2); border-radius: 10px; padding: 10px; align-self: start;
     box-shadow: 0 30px 60px -30px rgba(0, 0, 0, .9), inset 0 0 0 1px #000;
   }
-  .monitor img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #000; border-radius: 4px; }
+  .monitor iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; background: #000; border-radius: 4px; }
   .bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 4px 0; color: var(--ink-3); font-size: 11px; }
+  .bar a { color: var(--amber); text-decoration: none; border-bottom: 1px dotted var(--amber); }
   .console { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
   label { display: block; text-transform: uppercase; letter-spacing: .14em; font-size: 10px; color: var(--ink-2); margin-bottom: 6px; }
   textarea {
@@ -70,15 +71,14 @@
   <div class="meta">
     <span class="live" id="live">sandbox</span>
     <span id="sandbox">connecting…</span>
-    <a id="vnc" href="#" target="_blank" rel="noopener" hidden>open VNC ↗</a>
   </div>
 </header>
 <main>
   <section class="monitor">
-    <img id="screenshot" alt="Sandbox screen">
+    <iframe id="vnc" title="Sandbox screen (live VNC)" allow="clipboard-read; clipboard-write"></iframe>
     <div class="bar">
-      <span id="shot-info">waiting for first screenshot…</span>
-      <button id="refresh" type="button">Refresh</button>
+      <span id="view-info">creating sandbox…</span>
+      <a id="vnc-tab" href="#" target="_blank" rel="noopener" hidden>open in a new tab ↗</a>
     </div>
   </section>
   <section class="console">
@@ -99,39 +99,30 @@
 <script>
   const $ = (id) => document.getElementById(id);
   const live = $("live");
-  let shotStarted = 0;
 
   function setStatus(text, error = false) {
     $("status").textContent = text;
     $("status").classList.toggle("error", error);
   }
 
-  function refresh() {
-    shotStarted = performance.now();
-    live.classList.add("busy");
-    $("screenshot").src = `/api/screenshot?t=${Date.now()}`;
-  }
-
-  $("screenshot").addEventListener("load", () => {
-    live.classList.remove("busy");
-    live.classList.add("on");
-    const secs = ((performance.now() - shotStarted) / 1000).toFixed(1);
-    $("shot-info").textContent = `screenshot ${new Date().toLocaleTimeString()} · ${secs}s`;
-  });
-  $("screenshot").addEventListener("error", () => {
-    live.classList.remove("busy", "on");
-    $("shot-info").textContent = "screenshot failed — is the server running?";
-  });
-
+  // The sandbox is created on this first request; then the gateway's noVNC viewer is embedded.
   async function loadStatus() {
+    live.classList.add("busy");
     try {
       const res = await fetch("/api/status");
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
       $("sandbox").textContent = `${data.sandboxId} · ${data.host}`;
-      if (data.vncUrl) { $("vnc").href = data.vncUrl; $("vnc").hidden = false; }
+      $("vnc").src = data.vncUrl;
+      $("vnc-tab").href = data.vncUrl;
+      $("vnc-tab").hidden = false;
+      $("view-info").textContent = "live · noVNC · click inside to use the Mac directly";
+      live.classList.remove("busy");
+      live.classList.add("on");
     } catch (err) {
+      live.classList.remove("busy", "on");
       $("sandbox").textContent = `error: ${err.message}`;
+      $("view-info").textContent = "no sandbox — is the server running with a valid reservation?";
     }
   }
 
@@ -157,7 +148,6 @@
       $("exit-code").textContent = data.exitCode;
       $("exit-code").className = data.exitCode === 0 ? "ok" : "bad";
       setStatus(data.exitCode === 0 ? "done" : `script failed (exit ${data.exitCode})`, data.exitCode !== 0);
-      refresh();
     } catch (err) {
       setStatus(err.message, true);
     } finally {
@@ -166,13 +156,11 @@
   }
 
   $("run").addEventListener("click", run);
-  $("refresh").addEventListener("click", refresh);
   $("prompt").addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); run(); }
   });
 
   loadStatus();
-  refresh();
 </script>
 </body>
 </html>

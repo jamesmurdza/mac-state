@@ -27,12 +27,17 @@ describe("POST /api/run validation", () => {
 });
 
 describe("GET /", () => {
-  it("serves the page with the prompt box, run button and screenshot image", async () => {
+  it("serves the page with the prompt box, run button and VNC viewer frame", async () => {
     const res = await app.request("/");
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('id="prompt"');
     expect(html).toContain('id="run"');
-    expect(html).toContain('id="screenshot"');
+    expect(html).toContain('<iframe id="vnc"');
+    expect(html).not.toContain('id="screenshot"');
+  });
+
+  it("no longer serves /api/screenshot; the page uses VNC", async () => {
+    expect((await app.request("/api/screenshot")).status).toBe(404);
   });
 });

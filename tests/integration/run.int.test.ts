@@ -30,9 +30,10 @@ describe("POST /api/run with real Claude and a real sandbox", () => {
     const text = await session.use((s) => s.execSsh(`osascript -e 'tell application "TextEdit" to get text of front document'`));
     expect(text.stdout).toContain("hello from mac-state");
 
-    const shot = await app.request("/api/screenshot");
-    expect(shot.status).toBe(200);
-    expect(shot.headers.get("content-type")).toBe("image/jpeg");
-    expect((await shot.arrayBuffer()).byteLength).toBeGreaterThan(20_000);
+    const status = await app.request("/api/status");
+    expect(status.status).toBe(200);
+    const info = await status.json();
+    expect(info.sandboxId).toMatch(/^sb-/);
+    expect(info.vncUrl).toMatch(/\/vnc\?sandbox=sb-/);
   });
 });

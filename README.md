@@ -8,8 +8,9 @@ AppleScript, the sandbox runs it, the screenshot refreshes. Not an agent: one pr
 npm start          # http://localhost:3000 — the sandbox is created on the first request
 ```
 
-The page shows the live screen (JPEG, refreshed after every run or on demand), the generated
-script, stdout, stderr and the exit code. Ctrl+C deletes the sandbox. Design and plan:
+The page embeds the gateway's noVNC viewer, so you watch the script run live and can click and
+type in the Mac yourself. Next to it: the generated script, stdout, stderr and the exit code.
+Ctrl+C deletes the sandbox. Design and plan:
 [docs/specs](docs/specs/2026-09-14-web-app-design.md), [docs/plans](docs/plans/2026-09-14-web-app.md).
 
 Before the web app came a set of sandbox E2E scenarios that establish how the VMs behave. Each one:
@@ -77,7 +78,11 @@ See [testing.md](testing.md) for details.
 7. **Idle reaping**: `ephemeral: true` sandboxes are deleted about 2 min after the last activity.
    Keep-alive is one-shot in the npm SDK (`sandbox.keepalive()`), so `SandboxSession` runs its own
    30 s interval and recreates the sandbox when the gateway answers 404 or 410.
-8. **Claude Opus 5 declines "automate this Mac" prompts** under its cyber classifier
+8. **The hosted noVNC viewer can be embedded.** `sandbox.vncUrl` points at a small noVNC page on
+   the gateway with no `X-Frame-Options` or CSP, so an `<iframe>` gives a live, interactive view
+   (viewport scaling, mouse and keyboard). The URL's `token` is the account API key, so this is for
+   a localhost page only. Being connected also counts as activity, which keeps the sandbox alive.
+9. **Claude Opus 5 declines "automate this Mac" prompts** under its cyber classifier
    (`stop_reason: "refusal"`, category `cyber`). The request opts into server-side fallbacks
    (`fallbacks: "default"` with the `server-side-fallback-2026-07-01` beta), so the API re-runs a
    declined prompt on the recommended fallback model in the same call. In practice every run so far

@@ -2,6 +2,12 @@
 
 Date: 2026-09-14. Status: approved in conversation (stack, flow, lifecycle, tests).
 
+**Amendment (same day):** the screenshot image was replaced by an embedded noVNC `<iframe>` of the
+gateway's own viewer (`sandbox.vncUrl`), which is embeddable (no framing headers). Live view, no
+refresh cycle, and manual mouse/keyboard on the Mac. `GET /api/screenshot` was removed from the app;
+`takeScreenshot()` remains for the sandbox scenario tests. The API key travels in the viewer URL,
+acceptable for localhost only.
+
 ## Purpose
 
 A local test page for a use.computer macOS sandbox: see the screen, type what you want done,
