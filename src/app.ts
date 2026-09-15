@@ -11,11 +11,14 @@ export interface AppDeps {
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
 
-function promptFrom(body: unknown): string {
+function textField(body: unknown, key: "prompt" | "script"): string {
   if (!body || typeof body !== "object") return "";
-  const prompt = (body as { prompt?: unknown }).prompt;
-  return typeof prompt === "string" ? prompt.trim() : "";
+  const value = (body as Record<string, unknown>)[key];
+  return typeof value === "string" ? value.trim() : "";
 }
+
+/** What /api/run reports as the author when the caller sent the script itself. */
+export const RAW_SCRIPT_MODEL = "none (script sent as-is)";
 
 export function createApp({ session, generate }: AppDeps): Hono {
   const app = new Hono();
@@ -27,15 +30,22 @@ export function createApp({ session, generate }: AppDeps): Hono {
     return c.json({ sandboxId: s.sandboxId, host: s.host, vncUrl: s.vncUrl });
   });
 
+  // Body is either { prompt } (Claude writes the script) or { script } (run it as-is).
   app.post("/api/run", async (c) => {
-    const prompt = promptFrom(await c.req.json().catch(() => null));
-    if (!prompt) return c.json({ error: "prompt is required" }, 400);
+    const body = await c.req.json().catch(() => null);
+    const prompt = textField(body, "prompt");
+    const script = textField(body, "script");
+    if (!prompt && !script) return c.json({ error: "prompt or script is required" }, 400);
 
     let generated: Generation;
-    try {
-      generated = await generate(prompt);
-    } catch (err) {
-      return c.json({ error: `Claude: ${message(err)}` }, 502);
+    if (script) {
+      generated = { script, model: RAW_SCRIPT_MODEL };
+    } else {
+      try {
+        generated = await generate(prompt);
+      } catch (err) {
+        return c.json({ error: `Claude: ${message(err)}` }, 502);
+      }
     }
 
     const result = await session.use((s) => runAppleScript(s, generated.script));

@@ -11,10 +11,14 @@ const post = (body: string, headers: Record<string, string> = { "Content-Type": 
   app.request("/api/run", { method: "POST", headers, body });
 
 describe("POST /api/run validation", () => {
-  it("rejects a missing prompt with 400", async () => {
+  it("rejects a body with neither prompt nor script with 400", async () => {
     const res = await post("{}");
     expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: "prompt is required" });
+    expect(await res.json()).toEqual({ error: "prompt or script is required" });
+  });
+
+  it("rejects a blank script with 400", async () => {
+    expect((await post(JSON.stringify({ script: " \n" }))).status).toBe(400);
   });
 
   it("rejects a blank prompt with 400", async () => {

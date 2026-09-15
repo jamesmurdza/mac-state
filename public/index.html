@@ -58,6 +58,8 @@
   #send:disabled { opacity: .45; cursor: progress; }
   #send svg { width: 18px; height: 18px; }
   .prompt-foot { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; padding: 0 4px; font-size: 11px; color: var(--ink-3); }
+  .prompt-foot label { cursor: pointer; }
+  .prompt-foot input { vertical-align: -2px; accent-color: var(--amber); margin: 0 4px 0 2px; }
   #status { color: var(--ink-2); text-align: right; }
   #status.error { color: var(--red); }
 
@@ -115,7 +117,10 @@
           </svg>
         </button>
       </div>
-      <div class="prompt-foot"><span>Enter sends · Ctrl+Enter for a new line</span><span id="status">idle</span></div>
+      <div class="prompt-foot">
+        <span>Enter sends · Ctrl+Enter for a new line · <label><input type="checkbox" id="raw"> send as AppleScript (skip Claude)</label></span>
+        <span id="status">idle</span>
+      </div>
     </div>
   </section>
   <section class="console">
@@ -174,16 +179,18 @@
     $("exit-code").className = exitCode === 0 ? "ok" : "bad";
   }
 
+  // Unchecked: the text is a prompt and Claude writes the script. Checked: the text is the script.
   async function send() {
-    const prompt = $("prompt").value.trim();
-    if (!prompt) { setStatus("type a prompt first", true); return; }
+    const text = $("prompt").value.trim();
+    const raw = $("raw").checked;
+    if (!text) { setStatus(raw ? "paste a script first" : "type a prompt first", true); return; }
     $("send").disabled = true;
-    setStatus("thinking…");
+    setStatus(raw ? "running…" : "thinking…");
     try {
       const res = await fetch("/api/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify(raw ? { script: text } : { prompt: text }),
       });
       const data = await res.json();
       if (!res.ok) { setStatus(data.error, true); return; }
