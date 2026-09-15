@@ -32,7 +32,8 @@ describe("GET /", () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('id="prompt"');
-    expect(html).toContain('id="run"');
+    expect(html).toContain('id="send"');
+    expect(html).not.toContain('id="run"');
     expect(html).toContain('<iframe id="vnc"');
     expect(html).not.toContain('id="screenshot"');
   });

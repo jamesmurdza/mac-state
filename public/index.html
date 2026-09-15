@@ -7,11 +7,13 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/languages/applescript.min.js"></script>
 <style>
   :root {
     --bg: #0f0e0c; --panel: #1b1916; --line: #2c2823; --line-2: #3a342d;
     --ink: #ece6da; --ink-2: #a89f91; --ink-3: #6f675c;
-    --amber: #f0a830; --amber-2: #ffcf7a; --red: #f06a5a; --green: #7fd68a;
+    --amber: #f0a830; --amber-2: #ffcf7a; --red: #f06a5a; --green: #7fd68a; --blue: #8ec5ff;
     --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
     --serif: "Instrument Serif", Georgia, serif;
   }
@@ -23,46 +25,66 @@
   header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 18px; padding: 18px 28px 12px; border-bottom: 1px solid var(--line); }
   h1 { margin: 0; font: italic 400 34px/1 var(--serif); color: var(--amber-2); }
   .meta { display: flex; flex-wrap: wrap; gap: 16px; align-items: baseline; color: var(--ink-2); font-size: 12px; }
-  .meta a { color: var(--amber); text-decoration: none; border-bottom: 1px dotted var(--amber); }
   .live { display: inline-flex; align-items: center; gap: 6px; text-transform: uppercase; letter-spacing: .12em; font-size: 10px; }
   .live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); }
   .live.on::before { background: var(--green); box-shadow: 0 0 8px var(--green); }
   .live.busy::before { background: var(--amber); animation: pulse .9s infinite alternate; }
   @keyframes pulse { from { opacity: .35 } to { opacity: 1 } }
   main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr); gap: 24px; padding: 22px 28px 32px; }
-  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+  @media (max-width: 1000px) { main { grid-template-columns: minmax(0, 1fr); } }
+
+  /* left column: the view, then the prompt under it */
+  .stage { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
   .monitor {
-    background: #060605; border: 1px solid var(--line-2); border-radius: 10px; padding: 10px; align-self: start;
+    background: #060605; border: 1px solid var(--line-2); border-radius: 10px; padding: 10px;
     box-shadow: 0 30px 60px -30px rgba(0, 0, 0, .9), inset 0 0 0 1px #000;
   }
   .monitor iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; background: #000; border-radius: 4px; }
   .bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 4px 0; color: var(--ink-3); font-size: 11px; }
   .bar a { color: var(--amber); text-decoration: none; border-bottom: 1px dotted var(--amber); }
-  .console { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-  label { display: block; text-transform: uppercase; letter-spacing: .14em; font-size: 10px; color: var(--ink-2); margin-bottom: 6px; }
-  textarea {
-    width: 100%; min-height: 96px; resize: vertical; background: var(--panel); color: var(--ink);
-    border: 1px solid var(--line-2); border-radius: 6px; padding: 10px 12px; font: inherit;
+
+  .prompt { position: relative; }
+  .prompt textarea {
+    display: block; width: 100%; min-height: 74px; resize: vertical; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line-2); border-radius: 8px; padding: 12px 56px 12px 14px; font: inherit; line-height: 1.5;
   }
-  textarea:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3px rgba(240, 168, 48, .15); }
-  .actions { display: flex; align-items: center; gap: 12px; }
-  button { font: inherit; font-weight: 600; padding: 9px 16px; border-radius: 6px; border: 1px solid var(--line-2); background: var(--panel); color: var(--ink); cursor: pointer; }
-  button.primary { background: var(--amber); color: #1a1205; border-color: var(--amber); }
-  button.primary:hover { background: var(--amber-2); }
-  button:disabled { opacity: .5; cursor: progress; }
-  kbd { font: inherit; color: var(--ink-3); }
-  #status { margin-left: auto; color: var(--ink-2); text-align: right; }
+  .prompt textarea:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3px rgba(240, 168, 48, .15); }
+  .prompt textarea::placeholder { color: var(--ink-3); }
+  #send {
+    position: absolute; right: 10px; bottom: 10px; width: 36px; height: 36px; padding: 0;
+    display: grid; place-items: center; border: 0; border-radius: 8px; background: var(--amber); color: #1a1205; cursor: pointer;
+  }
+  #send:hover { background: var(--amber-2); }
+  #send:disabled { opacity: .45; cursor: progress; }
+  #send svg { width: 18px; height: 18px; }
+  .prompt-foot { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; padding: 0 4px; font-size: 11px; color: var(--ink-3); }
+  #status { color: var(--ink-2); text-align: right; }
   #status.error { color: var(--red); }
+
+  /* right column: two boxes */
+  .console { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
   .result { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
   .result h2 {
     display: flex; justify-content: space-between; margin: 0; padding: 7px 12px; border-bottom: 1px solid var(--line);
     font: 500 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-2);
   }
-  pre { margin: 0; padding: 10px 12px; min-height: 24px; max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
+  pre { margin: 0; padding: 10px 12px; min-height: 24px; max-height: 360px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
   pre:empty::before { content: "—"; color: var(--ink-3); }
+  .output-body:empty::before { content: "—"; color: var(--ink-3); display: block; padding: 10px 12px; }
+  .inner { border-top: 1px solid var(--line); }
+  .inner:first-child { border-top: 0; }
+  .inner h3 { margin: 0; padding: 6px 12px 0; font: 500 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); }
+  .inner pre { min-height: 0; }
   #stderr { color: var(--red); }
   #exit-code.ok { color: var(--green); }
   #exit-code.bad { color: var(--red); }
+
+  /* AppleScript highlighting, on the page's palette */
+  .hljs-keyword { color: var(--amber); }
+  .hljs-string { color: var(--green); }
+  .hljs-comment { color: var(--ink-3); font-style: italic; }
+  .hljs-number, .hljs-literal { color: var(--amber-2); }
+  .hljs-built_in, .hljs-type, .hljs-title { color: var(--blue); }
 </style>
 </head>
 <body>
@@ -74,26 +96,33 @@
   </div>
 </header>
 <main>
-  <section class="monitor">
-    <iframe id="vnc" title="Sandbox screen (live VNC)" allow="clipboard-read; clipboard-write"></iframe>
-    <div class="bar">
-      <span id="view-info">creating sandbox…</span>
-      <a id="vnc-tab" href="#" target="_blank" rel="noopener" hidden>open in a new tab ↗</a>
+  <section class="stage">
+    <div class="monitor">
+      <iframe id="vnc" title="Sandbox screen (live VNC)" allow="clipboard-read; clipboard-write"></iframe>
+      <div class="bar">
+        <span id="view-info">creating sandbox…</span>
+        <a id="vnc-tab" href="#" target="_blank" rel="noopener" hidden>open in a new tab ↗</a>
+      </div>
+    </div>
+    <div class="prompt">
+      <textarea id="prompt" placeholder="What should the Mac do?" spellcheck="false" aria-label="What should the Mac do?"></textarea>
+      <button id="send" type="button" title="Send (Enter)" aria-label="Send">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20 5v6a3 3 0 0 1-3 3H6"/><path d="m9 10-4 4 4 4"/>
+        </svg>
+      </button>
+      <div class="prompt-foot"><span>Enter sends · Ctrl+Enter for a new line</span><span id="status">idle</span></div>
     </div>
   </section>
   <section class="console">
-    <div>
-      <label for="prompt">What should the Mac do?</label>
-      <textarea id="prompt" placeholder="Open TextEdit and type hello" spellcheck="false"></textarea>
-    </div>
-    <div class="actions">
-      <button id="run" class="primary" type="button">Run</button>
-      <kbd>Ctrl+Enter</kbd>
-      <span id="status">idle</span>
-    </div>
     <div class="result"><h2>AppleScript <span id="model">claude-opus-5</span></h2><pre id="script"></pre></div>
-    <div class="result"><h2>stdout <span>exit <b id="exit-code">–</b></span></h2><pre id="stdout"></pre></div>
-    <div class="result"><h2>stderr</h2><pre id="stderr"></pre></div>
+    <div class="result">
+      <h2>Output <span>exit <b id="exit-code">–</b></span></h2>
+      <div class="output-body" id="output-body">
+        <div class="inner" id="stdout-box" hidden><h3>stdout</h3><pre id="stdout"></pre></div>
+        <div class="inner" id="stderr-box" hidden><h3>stderr</h3><pre id="stderr"></pre></div>
+      </div>
+    </div>
   </section>
 </main>
 <script>
@@ -126,13 +155,26 @@
     }
   }
 
-  async function run() {
+  function showScript(script) {
+    const { value } = hljs.highlight(script, { language: "applescript" });
+    $("script").innerHTML = `<code class="hljs language-applescript">${value}</code>`;
+  }
+
+  // Only the streams that carried something get a box.
+  function showOutput({ stdout, stderr, exitCode }) {
+    $("stdout").textContent = stdout;
+    $("stderr").textContent = stderr;
+    $("stdout-box").hidden = !stdout.trim();
+    $("stderr-box").hidden = !stderr.trim();
+    $("exit-code").textContent = exitCode;
+    $("exit-code").className = exitCode === 0 ? "ok" : "bad";
+  }
+
+  async function send() {
     const prompt = $("prompt").value.trim();
     if (!prompt) { setStatus("type a prompt first", true); return; }
-    $("run").disabled = true;
+    $("send").disabled = true;
     setStatus("thinking…");
-    $("exit-code").textContent = "–";
-    $("exit-code").className = "";
     try {
       const res = await fetch("/api/run", {
         method: "POST",
@@ -141,23 +183,29 @@
       });
       const data = await res.json();
       if (!res.ok) { setStatus(data.error, true); return; }
-      $("script").textContent = data.script;
+      showScript(data.script);
       $("model").textContent = data.model;
-      $("stdout").textContent = data.stdout;
-      $("stderr").textContent = data.stderr;
-      $("exit-code").textContent = data.exitCode;
-      $("exit-code").className = data.exitCode === 0 ? "ok" : "bad";
+      showOutput(data);
       setStatus(data.exitCode === 0 ? "done" : `script failed (exit ${data.exitCode})`, data.exitCode !== 0);
+      $("prompt").value = "";
     } catch (err) {
       setStatus(err.message, true);
     } finally {
-      $("run").disabled = false;
+      $("send").disabled = false;
+      $("prompt").focus();
     }
   }
 
-  $("run").addEventListener("click", run);
+  $("send").addEventListener("click", send);
   $("prompt").addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); run(); }
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    if (e.ctrlKey || e.metaKey || e.shiftKey) {
+      const ta = e.target;
+      ta.setRangeText("\n", ta.selectionStart, ta.selectionEnd, "end");
+      return;
+    }
+    if (!$("send").disabled) send();
   });
 
   loadStatus();
