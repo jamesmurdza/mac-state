@@ -29,6 +29,10 @@ test("Enter sends the prompt, the script is highlighted, only captured output bo
   await expect(page.locator("#status")).toHaveText("done", { timeout: 120_000 });
   await expect(page.locator("#script")).toContainText("TextEdit");
   await expect(page.locator("#script .hljs-keyword").first()).toBeVisible();
+  // Code is shown as written: 4-column tabs, no wrapping, horizontal scroll instead.
+  await expect(page.locator("#script")).toHaveCSS("tab-size", "4");
+  await expect(page.locator("#script")).toHaveCSS("white-space", "pre");
+  await expect(page.locator("#script")).toHaveCSS("overflow-x", "auto");
   await expect(page.locator("#exit-code")).toHaveText("0");
   await expect(page.locator("#model")).toContainText("claude-");
   await expect(page.locator("#stdout-box")).toBeVisible();
