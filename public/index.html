@@ -111,7 +111,8 @@
   /* ---------- right: chat ---------- */
   .chat { display: flex; flex-direction: column; align-items: center; min-width: 0; min-height: 0; background: var(--bg); font-family: var(--sans); }
   .messages {
-    flex: 1; width: min(760px, 100%); overflow-y: auto; padding: 18px 16px; display: flex; flex-direction: column; gap: 14px;
+    flex: 1; width: 100%; overflow-y: auto; padding: 18px max(16px, (100% - 760px) / 2);
+    display: flex; flex-direction: column; gap: 14px;
   }
   .msg { max-width: 92%; }
   .msg-system { align-self: center; max-width: 100%; color: var(--ink-3); font-size: 11px; text-align: center; padding: 2px 0; }
@@ -150,18 +151,16 @@
   .msg-status[open] > summary .chev { transform: rotate(45deg); }
   .msg-status.failed > summary { color: var(--red); }
   .tool-body {
-    margin-top: 4px; background: var(--panel-2); border-radius: 8px; padding: 10px 12px;
+    margin-top: 4px; background: var(--panel-2); border-radius: 8px; overflow: hidden;
   }
   .tool-body pre { margin: 0; white-space: pre; overflow: auto; max-height: 320px; tab-size: 4; font-size: 12px; font-family: var(--mono); }
-  .tool-body .stream { margin-top: 8px; }
-  .tool-body .stream-label {
-    display: block; margin-bottom: 3px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3);
+  .tool-body > pre { padding: 10px 12px; }
+  /* the output half (stdout/stderr/exit): distinct background, no labels, uniform font */
+  .tool-body .output {
+    padding: 10px 12px; background: var(--panel); border-top: 1px solid var(--line-2);
+    display: flex; flex-direction: column; gap: 6px;
   }
-  .tool-body .stream.stderr .stream-label, .tool-body .stream.error .stream-label { color: var(--red); }
-  .tool-body .stream pre { color: var(--ink-2); }
-  .tool-body .exit { margin-top: 8px; font-size: 11px; }
-  .tool-body .exit.ok { color: var(--green); }
-  .tool-body .exit.bad { color: var(--red); }
+  .tool-body .output pre, .tool-body .output .exit { color: var(--ink-2); font-size: 12px; font-family: var(--mono); }
   /* a group of consecutive tool calls: nested, each independently collapsible */
   .msg-group > .group-body {
     margin-top: 4px; margin-left: 3px; padding-left: 11px; border-left: 2px solid var(--line-2);
@@ -511,23 +510,22 @@
     $("sysinfo-overlay").classList.add("hidden");
   }
 
-  function streamHtml(kind, text) {
-    return `<div class="stream ${kind}"><span class="stream-label">${escapeHtml(kind)}</span><pre>${escapeHtml(text)}</pre></div>`;
-  }
-
-  // stdout, stderr and the exit code from a run_applescript step's ExecResult, each shown only
-  // when there's something to show.
+  // The output half of an AppleScript bubble: stdout, stderr and the exit code, no labels, all in
+  // one distinct-background block. Each piece is shown only when there's something to show.
   function execHtml(output) {
     if (!output || typeof output !== "object") return "";
     const parts = [];
     const stdout = (output.stdout || "").trim();
     const stderr = (output.stderr || "").trim();
-    if (stdout) parts.push(streamHtml("stdout", stdout));
-    if (stderr) parts.push(streamHtml("stderr", stderr));
-    if (typeof output.exitCode === "number") {
-      parts.push(`<div class="exit ${output.exitCode === 0 ? "ok" : "bad"}">exit ${output.exitCode}</div>`);
-    }
-    return parts.join("");
+    if (stdout) parts.push(`<pre>${escapeHtml(stdout)}</pre>`);
+    if (stderr) parts.push(`<pre>${escapeHtml(stderr)}</pre>`);
+    if (typeof output.exitCode === "number") parts.push(`<div class="exit">exit ${output.exitCode}</div>`);
+    return parts.length ? `<div class="output">${parts.join("")}</div>` : "";
+  }
+
+  // A plain-text output half (used for a tool-execution error under the script).
+  function outputText(text) {
+    return `<div class="output"><pre>${escapeHtml(text)}</pre></div>`;
   }
 
   // The model's own present-tense description of a step ("Opening TextEdit…"), falling back to a
@@ -548,7 +546,7 @@
       const failed = !!step.error || (step.output && step.output.exitCode !== 0);
       details.classList.toggle("failed", failed);
       body.innerHTML = step.error
-        ? scriptHtml(script) + streamHtml("error", String(step.error))
+        ? scriptHtml(script) + outputText(String(step.error))
         : scriptHtml(script) + execHtml(step.output);
     } else {
       details.classList.toggle("failed", !!step.error);
