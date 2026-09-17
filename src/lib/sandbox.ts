@@ -1,5 +1,6 @@
 import { Computer, type ExecResult, type MacOSSandbox } from "use-computer-sdk";
-import { requireEnv } from "./env.js";
+import { requireEnv } from "./env";
+import type { SandboxHandle } from "./sandbox-handle";
 
 export const SCRIPT_PATH = "/tmp/mac-state.applescript";
 const DEFAULT_BASE_URL = "https://api.use.computer";
@@ -50,7 +51,7 @@ export async function dismissScreenRecordingPrompt(sandbox: MacOSSandbox): Promi
 }
 
 /** Upload an AppleScript block to the sandbox and run it with osascript. */
-export async function runAppleScript(sandbox: MacOSSandbox, script: string): Promise<ExecResult> {
+export async function runAppleScript(sandbox: SandboxHandle, script: string): Promise<ExecResult> {
   await sandbox.upload(new TextEncoder().encode(script), SCRIPT_PATH);
   return sandbox.execSsh(`osascript ${SCRIPT_PATH}`);
 }
@@ -81,7 +82,7 @@ const SYSTEM_INFO_SCRIPT = [
 ].join("\n");
 
 /** Standard system info (macOS version, model, CPU/memory, hostname, uptime) via `sw_vers`/`sysctl`/`uptime` over SSH. */
-export async function systemInfo(sandbox: MacOSSandbox): Promise<SystemInfo> {
+export async function systemInfo(sandbox: SandboxHandle): Promise<SystemInfo> {
   const result = await sandbox.execSsh(SYSTEM_INFO_SCRIPT);
   if (result.exitCode !== 0) throw new Error(`Reading system info failed: ${result.stderr || result.stdout}`);
   const fields: Record<string, string> = {};
@@ -224,7 +225,7 @@ function summarizeTree(raw: UiTreeResponse, opts: UiSummaryOptions = {}): string
  * `sandbox.uiTree()` itself is an untyped, unbounded dump of the native macOS accessibility tree
  * (routinely tens of KB even for an idle desktop), so this always prunes and hard-caps the result.
  */
-export async function uiTreeSummary(sandbox: MacOSSandbox, opts: UiSummaryOptions = {}): Promise<string> {
+export async function uiTreeSummary(sandbox: SandboxHandle, opts: UiSummaryOptions = {}): Promise<string> {
   return summarizeTree((await sandbox.uiTree()) as UiTreeResponse, opts);
 }
 
@@ -248,7 +249,7 @@ function appHasWindow(raw: UiTreeResponse, app: string): boolean {
  * summary's `note` says it's frontmost with nothing on screen (and any blank window or blocking
  * dialog appears in `windows`), so the caller can react instead of acting on nothing.
  */
-export async function openApp(sandbox: MacOSSandbox, app: string, timeoutSeconds = 15): Promise<string> {
+export async function openApp(sandbox: SandboxHandle, app: string, timeoutSeconds = 15): Promise<string> {
   await runAppleScript(sandbox, `tell application "${escapeAppleScript(app)}" to activate`);
   const deadline = Date.now() + timeoutSeconds * 1000;
   let raw = (await sandbox.uiTree()) as UiTreeResponse;
@@ -301,7 +302,7 @@ interface FoundElement {
 
 /** Attach the current on-screen summary to an action result; settle first if the action changed
  * something, so animations/transitions have finished before we read. */
-async function withScreen(sandbox: MacOSSandbox, result: UiActionResult): Promise<UiActionResult> {
+async function withScreen(sandbox: SandboxHandle, result: UiActionResult): Promise<UiActionResult> {
   if (result.status === "ok") await sleep(600);
   const screen = summarizeTree((await sandbox.uiTree()) as UiTreeResponse);
   return { ...result, screen };
@@ -375,7 +376,7 @@ function matchElements(all: FoundElement[], role: string | undefined, label: str
  * can see (unlike System Events, which can't reach many SwiftUI controls). Re-reads the tree until
  * the element appears or the timeout elapses, so it doubles as a wait.
  */
-export async function clickElement(sandbox: MacOSSandbox, opts: UiClickOptions): Promise<UiActionResult> {
+export async function clickElement(sandbox: SandboxHandle, opts: UiClickOptions): Promise<UiActionResult> {
   const deadline = Date.now() + (opts.timeoutSeconds ?? 5) * 1000;
   let matches: FoundElement[] = [];
   for (;;) {
@@ -405,13 +406,13 @@ export async function clickElement(sandbox: MacOSSandbox, opts: UiClickOptions):
 }
 
 /** Type text into whatever control currently has keyboard focus (click it first). */
-export async function typeText(sandbox: MacOSSandbox, text: string): Promise<UiActionResult> {
+export async function typeText(sandbox: SandboxHandle, text: string): Promise<UiActionResult> {
   await sandbox.keyboard.type(text);
   return withScreen(sandbox, { status: "ok" });
 }
 
 /** Press a key or shortcut, e.g. "return", "escape", "tab", "cmd+shift+n", "cmd+r". */
-export async function pressKeys(sandbox: MacOSSandbox, keys: string): Promise<UiActionResult> {
+export async function pressKeys(sandbox: SandboxHandle, keys: string): Promise<UiActionResult> {
   const combo = keys.trim();
   if (combo.includes("+")) await sandbox.keyboard.hotkey(combo);
   else await sandbox.keyboard.press(combo);
@@ -435,7 +436,7 @@ export function screenshotUrl(baseUrl: string, sandboxId: string, opts: Screensh
  * 30-60 s to transfer (~50 KB/s egress). A JPEG at quality 80 is ~100 KB and
  * arrives in 2-3 s. The Python SDK exposes these params; the npm one does not yet.
  */
-export async function takeScreenshot(sandbox: MacOSSandbox, opts: ScreenshotOptions = {}): Promise<Uint8Array<ArrayBuffer>> {
+export async function takeScreenshot(sandbox: SandboxHandle, opts: ScreenshotOptions = {}): Promise<Uint8Array<ArrayBuffer>> {
   const baseUrl = process.env.USE_COMPUTER_BASE_URL || DEFAULT_BASE_URL;
   const res = await fetch(screenshotUrl(baseUrl, sandbox.sandboxId, opts), {
     headers: { Authorization: `Bearer ${requireEnv("USE_COMPUTER_API_KEY")}` },

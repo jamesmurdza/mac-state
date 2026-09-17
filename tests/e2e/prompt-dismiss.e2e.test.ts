@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dismissScreenRecordingPrompt, takeScreenshot } from "../../src/sandbox.js";
+import { dismissScreenRecordingPrompt, takeScreenshot } from "../../src/lib/sandbox.js";
 import { processState, snap, useSandbox } from "./helpers.js";
 
 const SCENARIO = "prompt-dismiss";

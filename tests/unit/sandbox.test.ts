@@ -1,10 +1,10 @@
-import type { MacOSSandbox } from "use-computer-sdk";
 import { describe, expect, it } from "vitest";
-import { screenshotUrl, uiTreeSummary } from "../../src/sandbox.js";
+import type { SandboxHandle } from "../../src/lib/sandbox-handle.js";
+import { screenshotUrl, uiTreeSummary } from "../../src/lib/sandbox.js";
 
 /** A trimmed real `uiTree()` response: one background app, one real window with nested elements. */
-function fakeSandbox(uiTree: unknown): MacOSSandbox {
-  return { uiTree: async () => uiTree } as unknown as MacOSSandbox;
+function fakeSandbox(uiTree: unknown): SandboxHandle {
+  return { uiTree: async () => uiTree } as unknown as SandboxHandle;
 }
 
 describe("uiTreeSummary", () => {

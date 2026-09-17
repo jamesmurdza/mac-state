@@ -10,18 +10,21 @@
  */
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 if (existsSync(".env")) process.loadEnvFile(".env");
-const { streamAgent } = await import("../src/agent.js");
-const { SandboxSession } = await import("../src/session.js");
-const { takeScreenshot } = await import("../src/sandbox.js");
-const { isModelChoice, DEFAULT_MODEL_CHOICE } = await import("../src/llm.js");
+const { streamAgent } = await import("../src/lib/agent.js");
+const { createSandbox, withSandbox } = await import("../src/lib/sandbox-handle.js");
+const { takeScreenshot } = await import("../src/lib/sandbox.js");
+const { isModelChoice, DEFAULT_MODEL_CHOICE } = await import("../src/lib/llm.js");
 
 const prompt = process.argv.slice(2).join(" ") || "use xcode to make and run a hello world script";
-const model = isModelChoice(process.env.MODEL) ? process.env.MODEL : DEFAULT_MODEL_CHOICE;
+const modelChoice = isModelChoice(process.env.MODEL) ? process.env.MODEL : DEFAULT_MODEL_CHOICE;
 const wantShots = process.env.SHOTS !== "0";
 const SHOTS = "/tmp/logs/shots";
 mkdirSync(SHOTS, { recursive: true });
 
-const session = new SandboxSession();
+// No SandboxSession singleton anymore: a plain SandboxRef box, the same thing a single
+// /api/stream request holds, that withSandbox()/streamAgent() swap in place if the sandbox
+// times out mid-run.
+const sandboxRef = { current: await createSandbox() };
 let stepN = 0;
 
 const short = (v: unknown, n = 500): string => {
@@ -32,7 +35,7 @@ const short = (v: unknown, n = 500): string => {
 async function snap(label: string): Promise<void> {
   if (!wantShots) return;
   try {
-    const buf = await session.use((s) => takeScreenshot(s, { quality: 55, scale: 0.6 }));
+    const buf = await withSandbox(sandboxRef, (s) => takeScreenshot(s, { quality: 55, scale: 0.6 }));
     const name = `${String(stepN).padStart(2, "0")}-${label}.jpg`;
     writeFileSync(`${SHOTS}/${name}`, buf);
     console.log(`        📷 ${SHOTS}/${name}`);
@@ -42,11 +45,11 @@ async function snap(label: string): Promise<void> {
 }
 
 try {
-  console.log(`PROMPT: ${prompt}\nMODEL:  ${model}\n${"-".repeat(70)}`);
+  console.log(`PROMPT: ${prompt}\nMODEL:  ${modelChoice}\n${"-".repeat(70)}`);
   const pending = new Map<string, { tool: string }>();
   const t0 = Date.now();
   let replyBuf = "";
-  for await (const ev of streamAgent(prompt, model, session)) {
+  for await (const ev of streamAgent({ prompt, modelChoice, sandboxRef, history: [] })) {
     const dt = ((Date.now() - t0) / 1000).toFixed(1).padStart(5);
     if (ev.t === "tool-call") {
       stepN++;
@@ -62,6 +65,8 @@ try {
     } else if (ev.t === "tool-error") {
       console.log(`[${dt}s]        ✗ ERROR → ${short(ev.error, 400)}`);
       await snap("error");
+    } else if (ev.t === "sandbox") {
+      console.log(`[${dt}s] ↻ sandbox recreated (the old one timed out): ${ev.sandboxId}`);
     } else if (ev.t === "text") {
       replyBuf += ev.text;
     } else if (ev.t === "error") {
@@ -73,6 +78,6 @@ try {
   console.log(`\nREPLY: ${replyBuf.trim() || "(none)"}`);
   await snap("final");
 } finally {
-  await session.close();
+  await sandboxRef.current.close();
   console.log("\n(sandbox closed)");
 }

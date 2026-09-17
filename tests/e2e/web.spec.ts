@@ -1,89 +1,75 @@
 import { expect, test } from "@playwright/test";
 
-const RAW_SCRIPT = [
-  'tell application "TextEdit"',
-  "\tactivate",
-  "\tif (count of documents) is 0 then make new document",
-  '\tset text of front document to "hello from playwright, sent as a ready-made script"',
-  "end tell",
-  'log "this line goes to stderr"',
-  'return "opened TextEdit"',
-].join("\n");
+/**
+ * Full rewrite, not a port: the pre-port public/index.html this spec used to drive had already
+ * diverged from this file (old selectors like #sandbox/#raw/#status/#script/#stdout referenced
+ * markup that no longer existed even before the Next.js port -- there was never a raw-AppleScript
+ * UI in the live page, only in the /api/run route). This rewrite targets the actual React DOM
+ * (see src/components/*.tsx) and the app's real, current behavior. Visual regression snapshots
+ * are not included: they'd need a first real run against a live sandbox to establish a baseline,
+ * which this environment can't produce.
+ */
 
 async function waitForSandbox(page: import("@playwright/test").Page) {
-  // First load creates the sandbox and points the viewer at it. #sandbox shows "error: …" if creation fails.
-  await expect(page.locator("#sandbox")).toContainText("sb-", { timeout: 90_000 });
+  // First load creates the sandbox and points the VNC iframe at it.
+  await expect(page.locator("#chip-text")).toHaveText("macOS sandbox", { timeout: 90_000 });
+  await expect(page.locator("#dot")).toHaveClass(/\bon\b/);
   await expect(page.locator("#vnc")).toHaveAttribute("src", /\/vnc\?sandbox=sb-/);
-  await expect(page.locator("#status")).toHaveText("idle");
 }
 
-test("send a ready-made AppleScript: no Claude, real sandbox, everything rendered", async ({ page }) => {
+test("loads, creates a sandbox automatically, and embeds the VNC viewer", async ({ page }) => {
   await page.goto("/");
-  const vnc = page.locator("#vnc");
   await waitForSandbox(page);
-
-  // Layout: prompt sits under the view; the right column holds exactly two boxes, output empty at first.
-  const viewBox = await vnc.boundingBox();
-  const promptBox = await page.locator("#prompt").boundingBox();
-  expect(promptBox!.y).toBeGreaterThan(viewBox!.y + viewBox!.height);
-  await expect(page.locator(".console .result")).toHaveCount(2);
-  await expect(page.locator("#stdout-box")).toBeHidden();
-  await expect(page.locator("#stderr-box")).toBeHidden();
-
-  const viewer = page.frameLocator("#vnc");
-  await expect(viewer.locator("#status")).toHaveText("Connected", { timeout: 60_000 });
-  await expect(page).toHaveScreenshot("initial.png", { mask: [vnc, page.locator("#sandbox")] });
-
-  await page.check("#raw");
-  await page.fill("#prompt", RAW_SCRIPT);
-  await page.press("#prompt", "Enter");
-  await expect(page.locator("#status")).toHaveText("running…");
-  await expect(page.locator("#send")).toBeDisabled();
-
-  await expect(page.locator("#status")).toHaveText("done", { timeout: 60_000 });
-  await expect(page.locator("#model")).toHaveText("none (script sent as-is)");
-  await expect(page.locator("#script")).toContainText("hello from playwright");
-  await expect(page.locator("#script .hljs-keyword").first()).toBeVisible();
-  // Code is shown as written: 4-column tabs, no wrapping, horizontal scroll instead.
-  await expect(page.locator("#script")).toHaveCSS("tab-size", "4");
-  await expect(page.locator("#script")).toHaveCSS("white-space", "pre");
-  await expect(page.locator("#script")).toHaveCSS("overflow-x", "auto");
-
-  // Both streams carried something, so both sub-boxes render.
-  await expect(page.locator("#exit-code")).toHaveText("0");
-  await expect(page.locator("#stdout-box")).toBeVisible();
-  await expect(page.locator("#stdout")).toHaveText(/opened TextEdit/);
-  await expect(page.locator("#stderr-box")).toBeVisible();
-  await expect(page.locator("#stderr")).toHaveText(/this line goes to stderr/);
-  await expect(page.locator("#send")).toBeEnabled();
-  await expect(page.locator("#prompt")).toHaveValue("");
-  await expect(page).toHaveScreenshot("after-run.png", { mask: [vnc, page.locator("#sandbox")] });
+  await expect(page.locator("#vnc-tab")).toHaveAttribute("href", /\/vnc\?sandbox=sb-/);
 });
 
-test("Enter sends a prompt to Claude, which writes the script (needs API credits)", async ({ page }) => {
+test("the system info chip opens a modal with live sandbox details", async ({ page }) => {
+  await page.goto("/");
+  await waitForSandbox(page);
+
+  await page.locator("#chip").click();
+  await expect(page.locator("#sysinfo-overlay")).not.toHaveClass(/hidden/);
+  await expect(page.locator("#sysinfo-body dt")).toContainText(["macOS", "Model", "Chip", "CPUs", "Memory", "Hostname", "Uptime"]);
+
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#sysinfo-overlay")).toHaveClass(/hidden/);
+});
+
+test("Ctrl+Enter inserts a newline; Enter on a blank prompt does nothing", async ({ page }) => {
+  await page.goto("/");
+  await page.fill("#prompt", "line one");
+  await page.press("#prompt", "Control+Enter");
+  await expect(page.locator("#prompt")).toHaveValue("line one\n");
+
+  await page.fill("#prompt", "   ");
+  await page.press("#prompt", "Enter");
+  // No user bubble should appear in the transcript for a blank/whitespace-only prompt.
+  await expect(page.locator(".msg-user")).toHaveCount(0);
+});
+
+test("typing a prompt reveals the send button; sending clears the composer", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#send")).toHaveClass(/hidden/);
+  await page.fill("#prompt", "hello");
+  await expect(page.locator("#send")).not.toHaveClass(/hidden/);
+});
+
+test("Enter sends a prompt to the agent, which drives the sandbox and replies (needs API credits)", async ({ page }) => {
   await page.goto("/");
   await waitForSandbox(page);
 
   await page.fill("#prompt", "Open TextEdit and put the text 'hello from playwright' in a new document");
   await page.press("#prompt", "Enter");
-  await expect(page.locator("#status")).toHaveText("thinking…");
-  await expect(page.locator("#status")).toHaveText("done", { timeout: 120_000 });
-  await expect(page.locator("#model")).toContainText("claude-");
-  await expect(page.locator("#script")).toContainText("TextEdit");
-  await expect(page.locator("#exit-code")).toHaveText("0");
-  await expect(page.locator("#stdout-box")).toBeVisible();
-  await expect(page.locator("#stderr-box")).toBeHidden();
-});
 
-test("Ctrl+Enter inserts a newline; Enter on a blank prompt is refused without calling the server", async ({ page }) => {
-  await page.goto("/");
-  await page.fill("#prompt", "line one");
-  await page.press("#prompt", "Control+Enter");
-  await expect(page.locator("#prompt")).toHaveValue("line one\n");
-  await expect(page.locator("#status")).toHaveText("idle");
+  // The user's own message renders immediately.
+  await expect(page.locator(".msg-user .bubble")).toHaveText("Open TextEdit and put the text 'hello from playwright' in a new document");
 
-  await page.fill("#prompt", "   ");
-  await page.press("#prompt", "Enter");
-  await expect(page.locator("#status")).toHaveText("type a prompt first");
-  await expect(page.locator("#status")).toHaveClass(/error/);
+  // The send button becomes a Stop button while the turn is running...
+  await expect(page.locator("#send")).toHaveAttribute("title", "Stop", { timeout: 10_000 });
+  // ...at least one tool call renders live...
+  await expect(page.locator(".msg-status").first()).toBeVisible({ timeout: 60_000 });
+  // ...and it goes back to Send once the turn finishes, with a final assistant reply rendered.
+  await expect(page.locator("#send")).toHaveAttribute("title", "Send (Enter)", { timeout: 120_000 });
+  await expect(page.locator(".msg-assistant .bubble").last()).not.toBeEmpty();
+  await expect(page.locator("#prompt")).toHaveValue("");
 });

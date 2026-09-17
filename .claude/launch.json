@@ -4,7 +4,7 @@
     {
       "name": "mac-state",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["start"],
+      "runtimeArgs": ["run", "dev"],
       "port": 3000
     }
   ]

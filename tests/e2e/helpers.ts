@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import type { MacOSSandbox } from "use-computer-sdk";
 import { afterAll, beforeAll } from "vitest";
-import { createSandboxFromEnv, dismissScreenRecordingPrompt, takeScreenshot } from "../../src/sandbox.js";
+import { createSandboxFromEnv, dismissScreenRecordingPrompt, takeScreenshot } from "../../src/lib/sandbox.js";
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 

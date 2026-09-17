@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { isJpeg } from "../../src/image.js";
-import { runAppleScript } from "../../src/sandbox.js";
+import { isJpeg } from "../../src/lib/image.js";
+import { runAppleScript } from "../../src/lib/sandbox.js";
 import { processState, snap, useSandbox } from "./helpers.js";
 
 const SCENARIO = "gui-textedit";

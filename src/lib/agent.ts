@@ -1,9 +1,9 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { generateText, type ModelMessage, stepCountIs, streamText, tool } from "ai";
 import { z } from "zod";
-import { MODEL_IDS, type ModelChoice } from "./llm.js";
-import { clickElement, openApp, pressKeys, typeText, uiTreeSummary } from "./sandbox.js";
-import type { SandboxSession } from "./session.js";
+import { MODEL_IDS, type ModelChoice } from "./llm";
+import { clickElement, openApp, pressKeys, typeText, uiTreeSummary } from "./sandbox";
+import { type SandboxDescriptor, type SandboxHandle, type SandboxRef, toDescriptor, withSandbox } from "./sandbox-handle";
 
 /**
  * Bound on tool-calling rounds per user turn — a runaway guard, not a target. Real GUI tasks
@@ -26,8 +26,14 @@ You drive the real GUI only — there is no shell, terminal, or scripting shortc
 
 Keep going, one step at a time, until the instruction is FULLY done — including any final step like actually running or saving. Do not stop after setup or assume a later step worked; look at each action's returned screen to verify it. Only when it's genuinely complete, reply with one short sentence describing what you did. If you truly cannot proceed (an app won't launch, a required control never appears after looking again), say so plainly and explain exactly where you got stuck — never claim success you didn't verify.`;
 
-/** The tools the model can call, each bound to the live sandbox session. */
-function makeTools(session: SandboxSession) {
+/**
+ * The tools the model can call, each bound to a per-request `SandboxRef`. A tool call that hits a
+ * "gone" sandbox (timed out mid-turn) transparently gets a fresh one via `withSandbox`; `onRotate`
+ * (when given) is notified synchronously at the moment that happens, so a streaming caller can
+ * surface it to the client before the tool's own result.
+ */
+function makeTools(ref: SandboxRef, onRotate?: (handle: SandboxHandle) => void) {
+  const run = <T,>(fn: (sandbox: SandboxHandle) => Promise<T>) => withSandbox(ref, fn, { onRotate });
   return {
     read_accessibility_tree: tool({
       description:
@@ -39,7 +45,7 @@ function makeTools(session: SandboxSession) {
             'A short present-tense description of what you\'re checking, shown live to the user, e.g. "Checking what\'s on screen".',
           ),
       }),
-      execute: () => session.use((s) => uiTreeSummary(s)),
+      execute: () => run((s) => uiTreeSummary(s)),
     }),
     click_element: tool({
       description:
@@ -51,7 +57,7 @@ function makeTools(session: SandboxSession) {
         app: z.string().optional().describe("Restrict to this app's windows. Optional."),
         index: z.number().int().optional().describe("1-based choice among candidates after an ambiguous result."),
       }),
-      execute: ({ app, role, label, index }) => session.use((s) => clickElement(s, { app, role, label, index })),
+      execute: ({ app, role, label, index }) => run((s) => clickElement(s, { app, role, label, index })),
     }),
     type_text: tool({
       description:
@@ -60,7 +66,7 @@ function makeTools(session: SandboxSession) {
         summary: z.string().describe('Short present-tense description, e.g. "Entering the project name".'),
         text: z.string().describe("The text to type."),
       }),
-      execute: ({ text }) => session.use((s) => typeText(s, text)),
+      execute: ({ text }) => run((s) => typeText(s, text)),
     }),
     press_keys: tool({
       description:
@@ -69,7 +75,7 @@ function makeTools(session: SandboxSession) {
         summary: z.string().describe('Short present-tense description, e.g. "Running the project".'),
         keys: z.string().describe('The key or combo, e.g. "return" or "cmd+shift+n".'),
       }),
-      execute: ({ keys }) => session.use((s) => pressKeys(s, keys)),
+      execute: ({ keys }) => run((s) => pressKeys(s, keys)),
     }),
     open_app: tool({
       description:
@@ -78,7 +84,7 @@ function makeTools(session: SandboxSession) {
         summary: z.string().describe('Short present-tense description, e.g. "Opening Xcode".'),
         app: z.string().describe('The app to open, e.g. "Xcode", "Safari", "TextEdit".'),
       }),
-      execute: ({ app }) => session.use((s) => openApp(s, app)),
+      execute: ({ app }) => run((s) => openApp(s, app)),
     }),
   };
 }
@@ -90,12 +96,12 @@ function makeTools(session: SandboxSession) {
  * Opus request opts into Anthropic's server-side fallback routing (a decline is re-run on the
  * recommended fallback model within the same call) via the beta header and provider option.
  */
-function agentRequest(messages: ModelMessage[], modelChoice: ModelChoice, session: SandboxSession) {
+function agentRequest(messages: ModelMessage[], modelChoice: ModelChoice, tools: ReturnType<typeof makeTools>) {
   return {
     model: anthropic(MODEL_IDS[modelChoice]),
     system: AGENT_SYSTEM_PROMPT,
     messages,
-    tools: makeTools(session),
+    tools,
     stopWhen: stepCountIs(MAX_AGENT_STEPS),
     ...(modelChoice === "opus"
       ? {
@@ -122,31 +128,39 @@ export interface AgentStep {
   error?: string;
 }
 
+/** Request-scoped input shared by runAgent and streamAgent — no server-held singletons. */
+export interface AgentTurnInput {
+  prompt: string;
+  modelChoice: ModelChoice;
+  /** The sandbox this turn acts on; may be swapped in place if it times out mid-turn. */
+  sandboxRef: SandboxRef;
+  /** The prior conversation, supplied by the caller (the client, in this stateless design). Never mutated. */
+  history: ModelMessage[];
+  /** streamAgent only: aborts the model call (Stop button / client disconnect). */
+  signal?: AbortSignal;
+}
+
 export interface AgentResult {
   /** The model (or server-side fallback) that actually answered. */
   model: string;
   steps: AgentStep[];
   /** The model's final text once it stops calling tools. */
   reply: string;
+  /** The full updated conversation — the caller's job is just to hold onto this for the next turn. */
+  history: ModelMessage[];
+  /** Whatever sandbox this turn ended up using (possibly a fresh one, if the original timed out). */
+  sandbox: SandboxDescriptor;
 }
 
 /**
  * Run the tool-calling agent to completion and return the whole turn at once: the model may
- * call read_accessibility_tree and run_applescript repeatedly, deciding for itself when the
- * instruction is done. Used by the non-streaming /api/run path.
- *
- * `history` is the running conversation. The new user turn and the model's response messages are
- * committed to it on success, so later turns see the full prior context.
+ * call the GUI tools repeatedly, deciding for itself when the instruction is done. Used by the
+ * non-streaming /api/run path.
  */
-export async function runAgent(
-  prompt: string,
-  modelChoice: ModelChoice,
-  session: SandboxSession,
-  history: ModelMessage[] = [],
-): Promise<AgentResult> {
+export async function runAgent(input: AgentTurnInput): Promise<AgentResult> {
+  const { prompt, modelChoice, sandboxRef, history } = input;
   const messages: ModelMessage[] = [...history, { role: "user", content: prompt }];
-  const result = await generateText(agentRequest(messages, modelChoice, session));
-  history.splice(0, history.length, ...messages, ...result.responseMessages);
+  const result = await generateText(agentRequest(messages, modelChoice, makeTools(sandboxRef)));
 
   const steps: AgentStep[] = [];
   for (const step of result.steps) {
@@ -165,7 +179,13 @@ export async function runAgent(
     }
   }
 
-  return { model: result.response?.modelId ?? MODEL_IDS[modelChoice], steps, reply: result.text };
+  return {
+    model: result.response?.modelId ?? MODEL_IDS[modelChoice],
+    steps,
+    reply: result.text,
+    history: [...messages, ...result.responseMessages],
+    sandbox: toDescriptor(sandboxRef.current),
+  };
 }
 
 /** One event in the live agent stream, mapped from the AI SDK's fullStream parts. */
@@ -174,8 +194,14 @@ export type AgentEvent =
   | { t: "tool-result"; id: string; output: unknown }
   | { t: "tool-error"; id: string; error: string }
   | { t: "text"; text: string }
+  /** The sandbox this turn is using changed (it timed out and a fresh one was created mid-turn).
+   *  Emitted before the tool-call's own tool-result/tool-error, so a client updates its VNC view
+   *  and remembered descriptor causally before seeing the result that came from the new sandbox. */
+  | { t: "sandbox"; sandboxId: string; host: string; vncUrl: string }
   | { t: "error"; error: string }
-  | { t: "done" };
+  /** `history` is the full updated conversation on a clean finish, or the caller's original
+   *  `input.history` unchanged if the turn was aborted/errored before finishing cleanly. */
+  | { t: "done"; history: ModelMessage[] };
 
 /**
  * Run the agent and yield events as they happen (tool calls, tool results, streamed reply
@@ -183,30 +209,38 @@ export type AgentEvent =
  * than throwing, since the HTTP response has already begun streaming by the time they occur.
  *
  * `signal`, when aborted (the user hit Stop / the client disconnected), stops the model from
- * taking further steps. `history` is the running conversation; the new user turn and the model's
- * response messages are committed to it only on a clean finish, so an interrupted or failed turn
- * doesn't leave a dangling user message or a tool call with no result.
+ * taking further steps. The turn's messages are only folded into the returned `history` on a
+ * clean finish, so an interrupted or failed turn doesn't leave a dangling user message or a tool
+ * call with no result.
  */
-export async function* streamAgent(
-  prompt: string,
-  modelChoice: ModelChoice,
-  session: SandboxSession,
-  history: ModelMessage[] = [],
-  signal?: AbortSignal,
-): AsyncGenerator<AgentEvent> {
+export async function* streamAgent(input: AgentTurnInput): AsyncGenerator<AgentEvent> {
+  const { prompt, modelChoice, sandboxRef, history, signal } = input;
   const messages: ModelMessage[] = [...history, { role: "user", content: prompt }];
+  const rotations: SandboxDescriptor[] = [];
+  const tools = makeTools(sandboxRef, (handle) => rotations.push(toDescriptor(handle)));
+
+  function* drainRotations(): Generator<AgentEvent> {
+    while (rotations.length) {
+      const d = rotations.shift()!;
+      yield { t: "sandbox", sandboxId: d.sandboxId, host: d.host, vncUrl: d.vncUrl };
+    }
+  }
+
   let clean = true;
+  let finalHistory = history;
   try {
-    const result = streamText({ ...agentRequest(messages, modelChoice, session), abortSignal: signal });
+    const result = streamText({ ...agentRequest(messages, modelChoice, tools), abortSignal: signal });
     for await (const part of result.fullStream) {
       switch (part.type) {
         case "tool-call":
           yield { t: "tool-call", id: part.toolCallId, tool: part.toolName as ToolName, input: part.input };
           break;
         case "tool-result":
+          yield* drainRotations();
           yield { t: "tool-result", id: part.toolCallId, output: part.output };
           break;
         case "tool-error":
+          yield* drainRotations();
           yield { t: "tool-error", id: part.toolCallId, error: String(part.error) };
           break;
         case "text-delta":
@@ -223,12 +257,13 @@ export async function* streamAgent(
     }
     if (clean) {
       const responseMessages = await result.responseMessages;
-      history.splice(0, history.length, ...messages, ...responseMessages);
+      finalHistory = [...messages, ...responseMessages];
     }
   } catch (err) {
     // An aborted stream throws AbortError — expected when the user hits Stop, not a real error.
     const aborted = signal?.aborted || (err instanceof Error && err.name === "AbortError");
     if (!aborted) yield { t: "error", error: err instanceof Error ? err.message : String(err) };
   }
-  yield { t: "done" };
+  yield* drainRotations();
+  yield { t: "done", history: finalHistory };
 }

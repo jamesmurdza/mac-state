@@ -1,18 +1,26 @@
 # mac-state
 
-Experiment: drive a [use.computer](https://use.computer) macOS sandbox with AppleScript and
-watch the screen change. A one-page local tool: type what the Mac should do, and a Claude agent
-(via the Vercel AI SDK) works the task on the sandbox — inspecting the accessibility tree and
-running AppleScript through tool calls, looping until it's done — while you watch it live.
+Experiment: drive a [use.computer](https://use.computer) macOS sandbox with a Claude agent and
+watch the screen change. A one-page Next.js app: type what the Mac should do, and the agent (via
+the Vercel AI SDK) works the task on the sandbox — inspecting the accessibility tree and driving
+the GUI through tool calls, looping until it's done — while you watch it live.
 
 ```bash
-npm start          # http://localhost:3000 — the sandbox is created on the first request
+npm run dev          # http://localhost:3000 — a sandbox is created automatically on first load
 ```
 
 The page embeds the gateway's noVNC viewer, so you watch the agent work live and can click and
-type in the Mac yourself. Next to it, the chat shows each tool call as a collapsible line (the
-AppleScript it ran, or the screen it read) and the agent's final reply.
-Ctrl+C deletes the sandbox. Design and plan:
+type in the Mac yourself. Next to it, the chat shows each tool call as a collapsible line and the
+agent's final reply.
+
+**Stateless by design**: the Next.js server holds no state between requests — no in-memory
+sandbox handle, no running conversation. The browser holds the current sandbox's connection info
+and the full message history, resending both with every request; the server rebuilds a working
+sandbox handle from just the id it's given (see finding 7 below) and, if that sandbox has since
+timed out, transparently creates a fresh one and reports it back. This means closing the tab (or
+just leaving it idle) is enough to let a sandbox clean itself up — there's no explicit shutdown
+hook, and a page refresh starts a new conversation against a new sandbox. Design and plan (for the
+pre-port Hono implementation, kept for history):
 [docs/specs](docs/specs/2026-09-14-web-app-design.md), [docs/plans](docs/plans/2026-09-14-web-app.md).
 
 Before the web app came a set of sandbox E2E scenarios that establish how the VMs behave. Each one:
@@ -45,11 +53,12 @@ ANTHROPIC_API_KEY=sk-ant-...      # for the web app's AppleScript generation
 ## Run
 
 ```bash
-npm start               # the web app
-npm run test:unit       # pure functions, no network
-npm run test:int        # SandboxSession + the /api/run path with real Claude and a real sandbox
-npm run test:e2e        # sandbox scenarios, ~3 min, writes test-results/<scenario>/*.jpg
-npm run test:e2e:web    # Playwright drives the page against a real server
+npm run dev              # the web app in dev mode
+npm run build && npm start  # production build + serve
+npm run test:unit        # pure functions + route handlers (mocked deps), no network
+npm run test:int         # sandbox-handle reconnect/rotation + the /api/run path with real Claude and a real sandbox
+npm run test:e2e         # sandbox scenarios, ~3 min, writes test-results/<scenario>/*.jpg
+npm run test:e2e:web     # Playwright drives the page against a real server
 ```
 
 See [testing.md](testing.md) for details.
@@ -61,9 +70,9 @@ See [testing.md](testing.md) for details.
    "bash is requesting to bypass the system private window picker..." sits mid-screen, owned by
    `UserNotificationCenter`. While it is up: apps launched with AppleScript `activate` come up
    hidden and never become frontmost, System Events keystrokes go to Finder, and it appears in
-   every screenshot. `dismissScreenRecordingPrompt()` in `src/sandbox.ts` clicks its Allow button
-   through System Events. After that, `activate`, keystrokes and screenshots behave like a normal
-   Mac for the life of the sandbox. Call it right after `create()`.
+   every screenshot. `dismissScreenRecordingPrompt()` in `src/lib/sandbox.ts` clicks its Allow
+   button through System Events. After that, `activate`, keystrokes and screenshots behave like a
+   normal Mac for the life of the sandbox. Call it right after `create()`.
 3. **`osascript` over SSH works, including app automation and UI scripting.** `tell application
    "TextEdit"` and System Events `keystroke` run with no permission prompt, so Automation and
    Accessibility are already granted. `sandbox.keyboard.hotkey("cmd+n")` works too.
@@ -77,13 +86,20 @@ See [testing.md](testing.md) for details.
    Routing it through System Events instead blocks System Events queries until the dialog closes.
 6. **Network and Finder scripting just work**: Safari loads `https://example.com` in about 2 s,
    Finder's `make new file at desktop` and `open (path to desktop)` behave as on a normal Mac.
-7. **Idle reaping**: `ephemeral: true` sandboxes are deleted about 2 min after the last activity.
-   Keep-alive is one-shot in the npm SDK (`sandbox.keepalive()`), so `SandboxSession` runs its own
-   30 s interval and recreates the sandbox when the gateway answers 404 or 410.
+7. **Idle reaping — leaned into, not fought.** `ephemeral: true` sandboxes are deleted about 2 min
+   after the last activity. The app used to run its own 30 s keepalive interval to suppress this;
+   the stateless port drops that entirely and lets sandboxes actually die on schedule, since
+   `src/lib/sandbox-handle.ts`'s `withSandbox()` transparently creates a fresh one and retries
+   whenever the gateway answers 404 or 410. This only works because `MacOSSandbox`'s methods
+   (verified against the SDK's compiled source) address `${baseUrl}/v1/sandboxes/{id}/...` using
+   nothing but the sandbox id — `attachSandbox(descriptor)` rebuilds a fully working handle from an
+   id alone, with zero network calls, so "reconnecting" after a timeout is just a local object
+   construction, not a round trip.
 8. **The hosted noVNC viewer can be embedded.** `sandbox.vncUrl` points at a small noVNC page on
    the gateway with no `X-Frame-Options` or CSP, so an `<iframe>` gives a live, interactive view
    (viewport scaling, mouse and keyboard). The URL's `token` is the account API key, so this is for
-   a localhost page only. Being connected also counts as activity, which keeps the sandbox alive.
+   a localhost/trusted deployment only — see the security note in `src/lib/route-helpers.ts`. Being
+   connected also counts as activity, which keeps the sandbox alive for as long as it's open.
 9. **Claude Opus 5 declines "automate this Mac" prompts** under its cyber classifier
    (`stop_reason: "refusal"`, category `cyber`). The request opts into server-side fallbacks
    (`fallbacks: "default"` with the `server-side-fallback-2026-07-01` beta), so the API re-runs a
