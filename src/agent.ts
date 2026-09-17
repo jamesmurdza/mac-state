@@ -2,7 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText, type ModelMessage, stepCountIs, streamText, tool } from "ai";
 import { z } from "zod";
 import { MODEL_IDS, type ModelChoice } from "./llm.js";
-import { runAppleScript, uiAction, uiTreeSummary } from "./sandbox.js";
+import { openApp, runAppleScript, uiAction, uiTreeSummary } from "./sandbox.js";
 import type { SandboxSession } from "./session.js";
 
 /**
@@ -15,21 +15,21 @@ export const MAX_AGENT_STEPS = 10;
 
 export const AGENT_SYSTEM_PROMPT = `You accomplish the user's instruction on a fresh macOS 15 virtual machine using the tools available. The machine is logged in as a normal user; Automation and Accessibility permissions are already granted.
 
-- Call read_accessibility_tree to see what's on screen: it lists each on-screen window's app and, per element, a role and label. Use those exact values with the interaction tools — never build UI element paths by hand or guess element indices.
+- Open apps with open_app — it launches/focuses the app, waits until it actually shows a window, and returns what's on screen. Don't use run_applescript "activate" plus a guessed delay. If open_app's result has a "note" that the app is frontmost with no window, or shows a dialog in windows, deal with that (e.g. click the dialog, or open_app again) before assuming the app is ready.
+- Call read_accessibility_tree to see what's on screen: it lists each on-screen window (with its app, role, and title — including dialogs/sheets/alerts) and, per element, a role and label. Use those exact values with the interaction tools — never build UI element paths by hand or guess element indices. To wait for something, just read the tree again until it appears.
 - To interact, prefer the semantic tools over raw scripting:
   - click_element to click a button, menu item, checkbox, tab, etc.
   - set_field_value to type into a text field or set a control's value.
-  - wait_for_element to wait for something to appear instead of guessing a delay.
   Pass the exact app, role, and label you saw in the tree. If a call returns "ambiguous", pick from the returned candidates by calling again with index. If "not-found", re-read the tree and try again.
-- Use run_applescript only as an escape hatch — to launch or activate an app (tell application "X" to activate), for an app's own scripting (TextEdit "make new document", Safari "open location", Finder "make new file"), or for anything the semantic tools don't cover. After launching an app, use wait_for_element rather than a fixed delay.
-- Keep going — inspecting, waiting, and acting as needed — until the instruction is fully done, then reply with one short sentence describing what you did.`;
+- Use run_applescript only as an escape hatch — for an app's own scripting (TextEdit "make new document", Safari "open location", Finder "make new file") or anything the semantic tools don't cover.
+- Keep going — inspecting and acting as needed — until the instruction is fully done, then reply with one short sentence describing what you did. If you can't complete it in the requested app (no window appears, a dialog blocks it, it won't launch), say so plainly — do not switch to a different method like the shell and claim success.`;
 
 /** The tools the model can call, each bound to the live sandbox session. */
 function makeTools(session: SandboxSession) {
   return {
     read_accessibility_tree: tool({
       description:
-        "Get a pruned JSON summary of what's currently on screen: running apps and, per on-screen window, its accessibility tree by role and label. Pass an element's exact app, role, and label to click_element / set_field_value / wait_for_element.",
+        "Get a pruned JSON summary of what's currently on screen: running apps and, per on-screen window (including dialogs and sheets, each with its role and title), its accessibility tree by role and label. Pass an element's exact app, role, and label to click_element / set_field_value. A `note` may flag an app that's frontmost with no window.",
       inputSchema: z.object({
         summary: z
           .string()
@@ -66,18 +66,14 @@ function makeTools(session: SandboxSession) {
       execute: ({ app, role, label, value, index }) =>
         session.use((s) => uiAction(s, { app, role, label, value, index, action: "set" })),
     }),
-    wait_for_element: tool({
+    open_app: tool({
       description:
-        "Wait until an element with the given role and label appears (polls up to timeoutSeconds). Use this instead of guessing a fixed delay after launching or navigating.",
+        "Launch or focus an app and wait until it presents a window, then return what's on screen (same JSON as read_accessibility_tree). Use this to open an app instead of run_applescript + a guessed delay. If the app ends up frontmost with no window (still launching, or a dialog is blocking it), the result's note says so and any dialog appears in windows — read it and act, don't assume the app is ready.",
       inputSchema: z.object({
-        summary: z.string().describe('Short present-tense description, e.g. "Waiting for the dialog".'),
-        app: z.string().describe("The app/process to look in."),
-        role: z.string().optional().describe("Element role. Optional but helps."),
-        label: z.string().describe("The element's label/name to wait for."),
-        timeoutSeconds: z.number().optional().describe("Max seconds to wait (default 10)."),
+        summary: z.string().describe('Short present-tense description, e.g. "Opening Xcode".'),
+        app: z.string().describe('The app to open, e.g. "Xcode", "Safari", "TextEdit".'),
       }),
-      execute: ({ app, role, label, timeoutSeconds }) =>
-        session.use((s) => uiAction(s, { app, role, label, timeoutSeconds, action: "find" })),
+      execute: ({ app }) => session.use((s) => openApp(s, app)),
     }),
     run_applescript: tool({
       description:
@@ -121,9 +117,9 @@ function agentRequest(messages: ModelMessage[], modelChoice: ModelChoice, sessio
 export type ToolName =
   | "run_applescript"
   | "read_accessibility_tree"
+  | "open_app"
   | "click_element"
-  | "set_field_value"
-  | "wait_for_element";
+  | "set_field_value";
 
 export interface AgentStep {
   tool: ToolName;

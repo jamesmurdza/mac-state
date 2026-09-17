@@ -166,34 +166,85 @@ export interface UiSummaryOptions {
 }
 
 /**
- * Compact JSON summary of what's on screen — running/frontmost apps, and per on-screen
- * window a pruned accessibility tree (role + label only, no ids/geometry) — meant to be
- * dropped into a generation prompt as context. `sandbox.uiTree()` itself is an untyped,
- * unbounded dump of the native macOS accessibility tree (routinely tens of KB even for an
- * idle desktop), so this always prunes and then hard-caps the result.
+ * Turn a raw uiTree() dump into a compact JSON summary of what's on screen — running/frontmost
+ * apps, and per on-screen window (including dialogs, sheets and alerts, each with its role) a
+ * pruned accessibility tree. Only obvious OS chrome is dropped, so a blocking dialog is never
+ * hidden. If an app is frontmost but shows no window, that is called out explicitly, since that
+ * "active but nothing to act on" state (e.g. an app still launching) is otherwise invisible.
  */
-export async function uiTreeSummary(sandbox: MacOSSandbox, opts: UiSummaryOptions = {}): Promise<string> {
+function summarizeTree(raw: UiTreeResponse, opts: UiSummaryOptions = {}): string {
   const maxChars = opts.maxChars ?? 4000;
   const maxDepth = opts.maxDepth ?? 6;
-  const raw = (await sandbox.uiTree()) as UiTreeResponse;
 
   const apps = (raw.applications ?? [])
     .filter((a) => a.info.active || a.windows.length > 0)
     .map((a) => ({ name: a.info.name, active: a.info.active }));
 
+  // Every on-screen window that isn't OS chrome — dialogs and sheets included, and blank/not-yet-
+  // rendered windows too (an empty window of the frontmost app is itself a useful signal).
   const windows = (raw.windows ?? [])
-    .filter((w) => w.is_on_screen && w.role === "app" && !SYSTEM_CHROME_OWNERS.has(w.owner))
+    .filter((w) => w.is_on_screen && !SYSTEM_CHROME_OWNERS.has(w.owner))
     .map((w) => ({
       app: w.owner,
+      role: w.role,
       title: w.name || undefined,
       elements: (w.children ?? []).map((c) => pruneElement(c, 0, maxDepth)).filter((c): c is PrunedElement => c !== null),
     }));
 
-  let json = JSON.stringify({ apps, windows });
+  const shownOwners = new Set(windows.map((w) => w.app));
+  const noWindow = (raw.applications ?? [])
+    .filter((a) => a.info.active && !shownOwners.has(a.info.name) && !SYSTEM_CHROME_OWNERS.has(a.info.name))
+    .map((a) => a.info.name);
+  const note = noWindow.length
+    ? `${noWindow.join(", ")} frontmost but showing no window (still launching, or a dialog may be blocking it).`
+    : undefined;
+
+  // note first so this key diagnostic survives the char cap even when windows is large.
+  let json = JSON.stringify({ note, apps, windows });
   if (json.length > maxChars) {
     json = `${json.slice(0, maxChars)}…(truncated, ${json.length} chars total)`;
   }
   return json;
+}
+
+/**
+ * Compact JSON summary of what's on screen — meant to be read by the agent before it acts.
+ * `sandbox.uiTree()` itself is an untyped, unbounded dump of the native macOS accessibility tree
+ * (routinely tens of KB even for an idle desktop), so this always prunes and hard-caps the result.
+ */
+export async function uiTreeSummary(sandbox: MacOSSandbox, opts: UiSummaryOptions = {}): Promise<string> {
+  return summarizeTree((await sandbox.uiTree()) as UiTreeResponse, opts);
+}
+
+/** True once the named app owns an on-screen (non-chrome) window that has rendered some content. */
+function appHasWindow(raw: UiTreeResponse, app: string): boolean {
+  const appLc = app.toLowerCase();
+  return (raw.windows ?? []).some(
+    (w) =>
+      w.is_on_screen &&
+      !SYSTEM_CHROME_OWNERS.has(w.owner) &&
+      (w.owner ?? "").toLowerCase().includes(appLc) &&
+      Array.isArray(w.children) &&
+      w.children.length > 0,
+  );
+}
+
+/**
+ * Launch or focus an app and wait until it actually presents a rendered window, then return the
+ * on-screen summary (same shape as uiTreeSummary). This replaces the brittle "activate then guess
+ * a delay" pattern: if the app never shows a usable window within the timeout, the returned
+ * summary's `note` says it's frontmost with nothing on screen (and any blank window or blocking
+ * dialog appears in `windows`), so the caller can react instead of acting on nothing.
+ */
+export async function openApp(sandbox: MacOSSandbox, app: string, timeoutSeconds = 15): Promise<string> {
+  await runAppleScript(sandbox, `tell application "${escapeAppleScript(app)}" to activate`);
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  let raw = (await sandbox.uiTree()) as UiTreeResponse;
+  while (!appHasWindow(raw, app) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 500));
+    raw = (await sandbox.uiTree()) as UiTreeResponse;
+  }
+  return summarizeTree(raw);
 }
 
 /** Escape a string for embedding inside an AppleScript double-quoted literal. */
