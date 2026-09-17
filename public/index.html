@@ -4,188 +4,279 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>mac-state</title>
+<meta name="color-scheme" content="light dark">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/languages/applescript.min.js"></script>
 <style>
   :root {
-    --bg: #0f0e0c; --panel: #1b1916; --line: #2c2823; --line-2: #3a342d;
-    --ink: #ece6da; --ink-2: #a89f91; --ink-3: #6f675c;
-    --amber: #f0a830; --amber-2: #ffcf7a; --red: #f06a5a; --green: #7fd68a; --blue: #8ec5ff;
+    --bg: #f6f3ee; --panel: #ffffff; --panel-2: #efeae1;
+    --line: #e4ddd0; --line-2: #d9cfbd;
+    --ink: #211b12; --ink-2: #6e6455; --ink-3: #a89c88;
+    --accent: #b9700a; --accent-ink: #ffffff;
+    --red: #b8402c; --green: #2f8f52; --blue: #2f6fb0;
+    --bubble-user: #eee5d6; --bubble-assistant: #ffffff;
     --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-    --serif: "Instrument Serif", Georgia, serif;
+    --shadow: 0 1px 2px rgba(30, 24, 12, .06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #100f0d; --panel: #1a1815; --panel-2: #221f1a;
+      --line: #2c2823; --line-2: #3a342c;
+      --ink: #ece6da; --ink-2: #a89f91; --ink-3: #6f675c;
+      --accent: #f0a830; --accent-ink: #1a1205;
+      --red: #f0796a; --green: #7fd68a; --blue: #8ec5ff;
+      --bubble-user: #262219; --bubble-assistant: #1a1815;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5);
+    }
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
-    margin: 0; min-height: 100vh; color: var(--ink); font: 13px/1.5 var(--mono);
-    background: radial-gradient(1200px 600px at 20% -10%, #24201a 0%, var(--bg) 55%) fixed, var(--bg);
+    margin: 0; color: var(--ink); font: 13px/1.55 var(--mono); background: var(--bg);
   }
-  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 18px; padding: 18px 28px 12px; border-bottom: 1px solid var(--line); }
-  h1 { margin: 0; font: italic 400 34px/1 var(--serif); color: var(--amber-2); }
-  .meta { display: flex; flex-wrap: wrap; gap: 16px; align-items: baseline; color: var(--ink-2); font-size: 12px; }
-  .live { display: inline-flex; align-items: center; gap: 6px; text-transform: uppercase; letter-spacing: .12em; font-size: 10px; }
-  .live::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); }
-  .live.on::before { background: var(--green); box-shadow: 0 0 8px var(--green); }
-  .live.busy::before { background: var(--amber); animation: pulse .9s infinite alternate; }
+  .app { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(320px, 1fr); height: 100vh; }
+  @media (max-width: 860px) { .app { grid-template-columns: 1fr; grid-template-rows: 42vh 1fr; height: 100vh; } }
+
+  /* ---------- left: VNC stage ---------- */
+  .stage { position: relative; background: #000; display: flex; min-width: 0; min-height: 0; }
+  .stage iframe { flex: 1; width: 100%; height: 100%; border: 0; background: #000; }
+  .chip {
+    position: absolute; top: 12px; left: 12px; display: flex; align-items: center; gap: 8px;
+    background: rgba(20, 18, 14, .72); backdrop-filter: blur(6px); color: #ece6da;
+    border: 1px solid rgba(255, 255, 255, .1); border-radius: 20px; padding: 6px 12px 6px 10px;
+    font-size: 11px; letter-spacing: .01em;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); flex: none; }
+  .dot.busy { background: var(--accent); animation: pulse .9s infinite alternate; }
+  .dot.on { background: var(--green); }
+  .dot.err { background: var(--red); }
   @keyframes pulse { from { opacity: .35 } to { opacity: 1 } }
-  main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(360px, 2fr); gap: 24px; padding: 22px 28px 32px; }
-  @media (max-width: 1000px) { main { grid-template-columns: minmax(0, 1fr); } }
+  .chip a { color: inherit; opacity: .7; text-decoration: none; margin-left: 2px; }
+  .chip a:hover { opacity: 1; }
 
-  /* left column: the view, then the prompt under it */
-  .stage { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-  .monitor {
-    background: #060605; border: 1px solid var(--line-2); border-radius: 10px; padding: 10px;
-    box-shadow: 0 30px 60px -30px rgba(0, 0, 0, .9), inset 0 0 0 1px #000;
+  /* ---------- right: chat ---------- */
+  .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--line); background: var(--bg); }
+  .messages { flex: 1; overflow-y: auto; padding: 18px 16px; display: flex; flex-direction: column; gap: 14px; }
+  .msg { max-width: 92%; }
+  .msg-system { align-self: center; max-width: 100%; color: var(--ink-3); font-size: 11px; text-align: center; padding: 2px 0; }
+  .msg-system.err { color: var(--red); }
+  .msg-user { align-self: flex-end; }
+  .msg-assistant, .msg-tool { align-self: flex-start; }
+  .bubble {
+    padding: 10px 13px; border-radius: 14px; white-space: pre-wrap; word-break: break-word; box-shadow: var(--shadow);
   }
-  .monitor iframe { display: block; width: 100%; aspect-ratio: 16 / 9; border: 0; background: #000; border-radius: 4px; }
-  .bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 4px 0; color: var(--ink-3); font-size: 11px; }
-  .bar a { color: var(--amber); text-decoration: none; border-bottom: 1px dotted var(--amber); }
+  .msg-user .bubble { background: var(--bubble-user); border-bottom-right-radius: 4px; }
+  .msg-assistant .bubble { background: var(--bubble-assistant); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .msg-assistant .bubble.err { color: var(--red); border-color: var(--red); }
+  .msg-user .bubble.raw { font-size: 12px; }
 
-  .prompt-box { position: relative; }
-  .prompt textarea {
-    display: block; width: 100%; min-height: 74px; resize: vertical; background: var(--panel); color: var(--ink);
-    border: 1px solid var(--line-2); border-radius: 8px; padding: 12px 56px 12px 14px; font: inherit; line-height: 1.5;
+  /* tool call: expandable AppleScript block */
+  .tool { width: 100%; }
+  .tool > summary {
+    display: flex; align-items: center; gap: 8px; list-style: none; cursor: pointer; user-select: none;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+    font-size: 11.5px; color: var(--ink-2);
   }
-  .prompt textarea:focus { outline: none; border-color: var(--amber); box-shadow: 0 0 0 3px rgba(240, 168, 48, .15); }
-  .prompt textarea::placeholder { color: var(--ink-3); }
-  #send {
-    position: absolute; right: 10px; bottom: 10px; width: 36px; height: 36px; padding: 0;
-    display: grid; place-items: center; border: 0; border-radius: 8px; background: var(--amber); color: #1a1205; cursor: pointer;
+  .tool > summary::-webkit-details-marker { display: none; }
+  .tool > summary .chev { width: 9px; height: 9px; flex: none; border-right: 1.6px solid var(--ink-3); border-bottom: 1.6px solid var(--ink-3); transform: rotate(-45deg); transition: transform .15s; }
+  .tool[open] > summary .chev { transform: rotate(45deg); }
+  .tool > summary .tool-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); flex: none; }
+  .tool > summary .tool-dot.ok { background: var(--green); }
+  .tool > summary .tool-dot.bad { background: var(--red); }
+  .tool > summary .tool-dot.pending { background: var(--accent); animation: pulse .9s infinite alternate; }
+  .tool > summary .label { font-weight: 600; color: var(--ink); }
+  .tool > summary .model { color: var(--ink-3); font-size: 10.5px; margin-left: auto; }
+  .tool-body {
+    border: 1px solid var(--line); border-top: 0; border-radius: 0 0 10px 10px; background: var(--panel-2);
+    padding: 10px 12px; margin-top: -1px;
   }
-  #send:hover { background: var(--amber-2); }
-  #send:disabled { opacity: .45; cursor: progress; }
-  #send svg { width: 18px; height: 18px; }
-  .prompt-foot { display: flex; justify-content: space-between; gap: 12px; margin-top: 6px; padding: 0 4px; font-size: 11px; color: var(--ink-3); }
-  .prompt-foot label { cursor: pointer; }
-  .prompt-foot input { vertical-align: -2px; accent-color: var(--amber); margin: 0 4px 0 2px; }
-  #status { color: var(--ink-2); text-align: right; }
-  #status.error { color: var(--red); }
+  .tool-body pre { margin: 0; white-space: pre; overflow-x: auto; tab-size: 4; font-size: 12px; }
+  .tool-body .stream { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+  .tool-body .stream h4 { margin: 0 0 4px; font: 500 9.5px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+  .tool-body .stream pre { white-space: pre-wrap; word-break: break-word; }
+  .tool-body .stderr pre { color: var(--red); }
+  .tool-body .exit { margin-top: 8px; font-size: 11px; color: var(--ink-3); }
+  .tool-body .exit b.ok { color: var(--green); }
+  .tool-body .exit b.bad { color: var(--red); }
 
-  /* right column: two boxes */
-  .console { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-  .result { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
-  .result h2 {
-    display: flex; justify-content: space-between; margin: 0; padding: 7px 12px; border-bottom: 1px solid var(--line);
-    font: 500 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-2);
-  }
-  pre { margin: 0; padding: 10px 12px; min-height: 24px; max-height: 360px; overflow: auto; white-space: pre-wrap; word-break: break-word; }
-  /* Generated code: keep lines intact and scroll sideways; osascript output uses tabs. */
-  #script { white-space: pre; word-break: normal; overflow-x: auto; tab-size: 4; }
-  pre:empty::before { content: "—"; color: var(--ink-3); }
-  .output-body:empty::before { content: "—"; color: var(--ink-3); display: block; padding: 10px 12px; }
-  .inner { border-top: 1px solid var(--line); }
-  .inner:first-child { border-top: 0; }
-  .inner h3 { margin: 0; padding: 6px 12px 0; font: 500 10px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--ink-3); }
-  .inner pre { min-height: 0; }
-  #stderr { color: var(--red); }
-  #exit-code.ok { color: var(--green); }
-  #exit-code.bad { color: var(--red); }
-
-  /* AppleScript highlighting, on the page's palette */
-  .hljs-keyword { color: var(--amber); }
+  /* AppleScript highlighting */
+  .hljs-keyword { color: var(--accent); }
   .hljs-string { color: var(--green); }
   .hljs-comment { color: var(--ink-3); font-style: italic; }
-  .hljs-number, .hljs-literal { color: var(--amber-2); }
+  .hljs-number, .hljs-literal { color: var(--accent); }
   .hljs-built_in, .hljs-type, .hljs-title { color: var(--blue); }
+
+  /* composer */
+  .composer { display: flex; align-items: flex-end; gap: 8px; padding: 12px 14px; border-top: 1px solid var(--line); background: var(--bg); }
+  .composer textarea {
+    flex: 1; resize: none; min-height: 40px; max-height: 200px; background: var(--panel); color: var(--ink);
+    border: 1px solid var(--line-2); border-radius: 10px; padding: 10px 12px; font: inherit; line-height: 1.45;
+  }
+  .composer textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent); }
+  .composer textarea::placeholder { color: var(--ink-3); }
+  .raw-toggle { display: flex; align-items: center; gap: 5px; color: var(--ink-3); font-size: 10.5px; padding: 0 2px 6px; cursor: pointer; white-space: nowrap; }
+  .raw-toggle input { accent-color: var(--accent); margin: 0; }
+  #send {
+    width: 38px; height: 38px; padding: 0; flex: none; display: grid; place-items: center;
+    border: 0; border-radius: 10px; background: var(--accent); color: var(--accent-ink); cursor: pointer;
+  }
+  #send:hover { filter: brightness(1.08); }
+  #send:disabled { opacity: .45; cursor: progress; }
+  #send svg { width: 17px; height: 17px; }
+
+  .messages::-webkit-scrollbar { width: 9px; }
+  .messages::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 6px; }
 </style>
 </head>
 <body>
-<header>
-  <h1>mac-state</h1>
-  <div class="meta">
-    <span class="live" id="live">sandbox</span>
-    <span id="sandbox">connecting…</span>
-  </div>
-</header>
-<main>
+<div class="app">
   <section class="stage">
-    <div class="monitor">
-      <iframe id="vnc" title="Sandbox screen (live VNC)" allow="clipboard-read; clipboard-write"></iframe>
-      <div class="bar">
-        <span id="view-info">creating sandbox…</span>
-        <a id="vnc-tab" href="#" target="_blank" rel="noopener" hidden>open in a new tab ↗</a>
-      </div>
-    </div>
-    <div class="prompt">
-      <div class="prompt-box">
-        <textarea id="prompt" placeholder="What should the Mac do?" spellcheck="false" aria-label="What should the Mac do?"></textarea>
-        <button id="send" type="button" title="Send (Enter)" aria-label="Send">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M20 5v6a3 3 0 0 1-3 3H6"/><path d="m9 10-4 4 4 4"/>
-          </svg>
-        </button>
-      </div>
-      <div class="prompt-foot">
-        <span>Enter sends · Ctrl+Enter for a new line · <label><input type="checkbox" id="raw"> send as AppleScript (skip Claude)</label></span>
-        <span id="status">idle</span>
-      </div>
+    <iframe id="vnc" title="Sandbox screen (live VNC)" allow="clipboard-read; clipboard-write"></iframe>
+    <div class="chip">
+      <span class="dot" id="dot"></span>
+      <span id="chip-text">connecting…</span>
+      <a id="vnc-tab" href="#" target="_blank" rel="noopener" hidden title="Open in a new tab">↗</a>
     </div>
   </section>
-  <section class="console">
-    <div class="result"><h2>AppleScript <span id="model">claude-opus-5</span></h2><pre id="script"></pre></div>
-    <div class="result">
-      <h2>Output <span>exit <b id="exit-code">–</b></span></h2>
-      <div class="output-body" id="output-body">
-        <div class="inner" id="stdout-box" hidden><h3>stdout</h3><pre id="stdout"></pre></div>
-        <div class="inner" id="stderr-box" hidden><h3>stderr</h3><pre id="stderr"></pre></div>
-      </div>
-    </div>
+  <section class="chat">
+    <div class="messages" id="messages"></div>
+    <form class="composer" id="composer">
+      <textarea id="prompt" placeholder="What should the Mac do?" spellcheck="false" aria-label="What should the Mac do?" rows="1"></textarea>
+      <label class="raw-toggle"><input type="checkbox" id="raw"> script</label>
+      <button id="send" type="button" title="Send (Enter)" aria-label="Send">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20 5v6a3 3 0 0 1-3 3H6"/><path d="m9 10-4 4 4 4"/>
+        </svg>
+      </button>
+    </form>
   </section>
-</main>
+</div>
 <script>
   const $ = (id) => document.getElementById(id);
-  const live = $("live");
+  const messages = $("messages");
 
-  function setStatus(text, error = false) {
-    $("status").textContent = text;
-    $("status").classList.toggle("error", error);
+  function scrollToBottom() {
+    messages.scrollTop = messages.scrollHeight;
+  }
+
+  function addSystemMessage(text, isError = false) {
+    const el = document.createElement("div");
+    el.className = "msg msg-system" + (isError ? " err" : "");
+    el.textContent = text;
+    messages.appendChild(el);
+    scrollToBottom();
+    return el;
+  }
+
+  function addUserMessage(text, raw) {
+    const wrap = document.createElement("div");
+    wrap.className = "msg msg-user";
+    const bubble = document.createElement("div");
+    bubble.className = "bubble" + (raw ? " raw" : "");
+    bubble.textContent = text;
+    wrap.appendChild(bubble);
+    messages.appendChild(wrap);
+    scrollToBottom();
+  }
+
+  // Pending tool call, filled in once the run finishes.
+  function addPendingTool() {
+    const details = document.createElement("details");
+    details.className = "tool";
+    details.innerHTML = `
+      <summary>
+        <span class="tool-dot pending"></span>
+        <span class="label">AppleScript</span>
+        <span class="model">running…</span>
+        <span class="chev"></span>
+      </summary>
+      <div class="tool-body"><pre>generating…</pre></div>`;
+    const wrap = document.createElement("div");
+    wrap.className = "msg msg-tool";
+    wrap.appendChild(details);
+    messages.appendChild(wrap);
+    scrollToBottom();
+    return details;
+  }
+
+  function friendlyModel(model) {
+    return model.startsWith("none") ? "raw script" : model;
+  }
+
+  function fillTool(details, { script, model, stdout, stderr, exitCode }) {
+    const ok = exitCode === 0;
+    details.querySelector(".tool-dot").className = "tool-dot " + (ok ? "ok" : "bad");
+    details.querySelector(".model").textContent = friendlyModel(model);
+    const { value } = hljs.highlight(script, { language: "applescript" });
+    let body = `<pre><code class="hljs language-applescript">${value}</code></pre>`;
+    if (stdout && stdout.trim()) {
+      body += `<div class="stream stdout"><h4>stdout</h4><pre>${escapeHtml(stdout)}</pre></div>`;
+    }
+    if (stderr && stderr.trim()) {
+      body += `<div class="stream stderr"><h4>stderr</h4><pre>${escapeHtml(stderr)}</pre></div>`;
+    }
+    body += `<div class="exit">exit <b class="${ok ? "ok" : "bad"}">${exitCode}</b></div>`;
+    details.querySelector(".tool-body").innerHTML = body;
+  }
+
+  function toolError(details, message) {
+    details.querySelector(".tool-dot").className = "tool-dot bad";
+    details.querySelector(".model").textContent = "failed";
+    details.querySelector(".tool-body").innerHTML = `<pre>${escapeHtml(message)}</pre>`;
+  }
+
+  function addAssistantMessage(text, isError = false) {
+    const wrap = document.createElement("div");
+    wrap.className = "msg msg-assistant";
+    const bubble = document.createElement("div");
+    bubble.className = "bubble" + (isError ? " err" : "");
+    bubble.textContent = text;
+    wrap.appendChild(bubble);
+    messages.appendChild(wrap);
+    scrollToBottom();
+  }
+
+  function escapeHtml(s) {
+    return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
   }
 
   // The sandbox is created on this first request; then the gateway's noVNC viewer is embedded.
   async function loadStatus() {
-    live.classList.add("busy");
+    const dot = $("dot");
+    dot.className = "dot busy";
+    $("chip-text").textContent = "connecting…";
     try {
       const res = await fetch("/api/status");
       const data = await res.json();
       if (!res.ok) throw new Error(data.error);
-      $("sandbox").textContent = `${data.sandboxId} · ${data.host}`;
+      $("chip-text").textContent = `${data.sandboxId} · ${data.host}`;
       $("vnc").src = data.vncUrl;
       $("vnc-tab").href = data.vncUrl;
       $("vnc-tab").hidden = false;
-      $("view-info").textContent = "live · noVNC · click inside to use the Mac directly";
-      live.classList.remove("busy");
-      live.classList.add("on");
+      dot.className = "dot on";
+      addSystemMessage(`Connected to ${data.sandboxId} · ${data.host}`);
     } catch (err) {
-      live.classList.remove("busy", "on");
-      $("sandbox").textContent = `error: ${err.message}`;
-      $("view-info").textContent = "no sandbox — is the server running with a valid reservation?";
+      dot.className = "dot err";
+      $("chip-text").textContent = "no sandbox";
+      addSystemMessage(`Couldn't connect to a sandbox: ${err.message}`, true);
     }
-  }
-
-  function showScript(script) {
-    const { value } = hljs.highlight(script, { language: "applescript" });
-    $("script").innerHTML = `<code class="hljs language-applescript">${value}</code>`;
-  }
-
-  // Only the streams that carried something get a box.
-  function showOutput({ stdout, stderr, exitCode }) {
-    $("stdout").textContent = stdout;
-    $("stderr").textContent = stderr;
-    $("stdout-box").hidden = !stdout.trim();
-    $("stderr-box").hidden = !stderr.trim();
-    $("exit-code").textContent = exitCode;
-    $("exit-code").className = exitCode === 0 ? "ok" : "bad";
   }
 
   // Unchecked: the text is a prompt and Claude writes the script. Checked: the text is the script.
   async function send() {
     const text = $("prompt").value.trim();
     const raw = $("raw").checked;
-    if (!text) { setStatus(raw ? "paste a script first" : "type a prompt first", true); return; }
+    if (!text) return;
+
+    addUserMessage(text, raw);
+    $("prompt").value = "";
+    $("prompt").style.height = "auto";
     $("send").disabled = true;
-    setStatus(raw ? "running…" : "thinking…");
+    const tool = addPendingTool();
+
     try {
       const res = await fetch("/api/run", {
         method: "POST",
@@ -193,14 +284,20 @@
         body: JSON.stringify(raw ? { script: text } : { prompt: text }),
       });
       const data = await res.json();
-      if (!res.ok) { setStatus(data.error, true); return; }
-      showScript(data.script);
-      $("model").textContent = data.model;
-      showOutput(data);
-      setStatus(data.exitCode === 0 ? "done" : `script failed (exit ${data.exitCode})`, data.exitCode !== 0);
-      $("prompt").value = "";
+      if (!res.ok) {
+        toolError(tool, data.error);
+        addAssistantMessage(data.error, true);
+        return;
+      }
+      fillTool(tool, data);
+      if (data.exitCode === 0) {
+        addAssistantMessage(data.stdout.trim() || "Done.");
+      } else {
+        addAssistantMessage(data.stderr.trim() || `Script failed (exit ${data.exitCode})`, true);
+      }
     } catch (err) {
-      setStatus(err.message, true);
+      toolError(tool, err.message);
+      addAssistantMessage(err.message, true);
     } finally {
       $("send").disabled = false;
       $("prompt").focus();
@@ -217,6 +314,10 @@
       return;
     }
     if (!$("send").disabled) send();
+  });
+  $("prompt").addEventListener("input", (e) => {
+    e.target.style.height = "auto";
+    e.target.style.height = Math.min(e.target.scrollHeight, 200) + "px";
   });
 
   loadStatus();
