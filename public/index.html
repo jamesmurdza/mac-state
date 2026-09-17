@@ -136,7 +136,7 @@
 
   /* run status: plain text, no badge — click to reveal the script below it. Looks the same
      whether the run succeeded or failed; only the wording changes. */
-  .msg-status { align-self: flex-start; width: 100%; }
+  .msg-status { align-self: flex-start; width: 100%; max-width: 100%; }
   .msg-status > summary {
     display: flex; align-items: center; gap: 6px; list-style: none; cursor: pointer; user-select: none;
     color: var(--ink-3); padding: 2px 0;
@@ -151,7 +151,7 @@
   .tool-body {
     margin-top: 4px; background: var(--panel-2); border-radius: 8px; padding: 10px 12px;
   }
-  .tool-body pre { margin: 0; white-space: pre; overflow-x: auto; tab-size: 4; font-size: 12px; font-family: var(--mono); }
+  .tool-body pre { margin: 0; white-space: pre; overflow: auto; max-height: 320px; tab-size: 4; font-size: 12px; font-family: var(--mono); }
   .tool-body .stream { margin-top: 8px; }
   .tool-body .stream-label {
     display: block; margin-bottom: 3px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3);
@@ -161,6 +161,12 @@
   .tool-body .exit { margin-top: 8px; font-size: 11px; }
   .tool-body .exit.ok { color: var(--green); }
   .tool-body .exit.bad { color: var(--red); }
+  /* a group of consecutive tool calls: nested, each independently collapsible */
+  .msg-group > .group-body {
+    margin-top: 4px; margin-left: 3px; padding-left: 11px; border-left: 2px solid var(--line-2);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .msg-group > .group-body > .msg-status { width: 100%; max-width: 100%; }
 
   /* AppleScript highlighting */
   .hljs-keyword { color: var(--accent); }
@@ -259,10 +265,9 @@
     return el;
   }
 
-  // Left-aligned, persistent status line for a run's progress (unlike addSystemMessage,
-  // which is centered and used for one-off app-level notices). Doubles as the disclosure
-  // control for the script — no separate "tool call" badge; click the text to reveal it.
-  function addStatusMessage(text) {
+  // A collapsible status line (the disclosure control for a tool call — click the text to
+  // reveal the script/output body). Built but not attached; the caller places it.
+  function createStatusDetails(text) {
     const details = document.createElement("details");
     details.className = "msg msg-status";
     details.innerHTML = `
@@ -272,11 +277,45 @@
       </summary>
       <div class="tool-body"></div>`;
     details.querySelector(".status-text").textContent = text;
+    return details;
+  }
+
+  // Left-aligned, persistent status line appended to the transcript (unlike addSystemMessage,
+  // which is centered and used for one-off app-level notices).
+  function addStatusMessage(text) {
+    const details = createStatusDetails(text);
     messages.appendChild(details);
     scrollToBottom();
     return details;
   }
 
+  // A wrapper that collapses a run of consecutive tool calls into one line ("Read screen and
+  // ran scripts"); expanding it reveals each call nested inside, itself expandable.
+  function createGroupDetails() {
+    const details = document.createElement("details");
+    details.className = "msg msg-status msg-group";
+    details.innerHTML = `
+      <summary>
+        <span class="status-text"></span>
+        <span class="chev"></span>
+      </summary>
+      <div class="group-body"></div>`;
+    return details;
+  }
+
+  // "Read screen", "Ran script", "Read screen and ran scripts", etc., from the calls so far.
+  function groupSummary(children) {
+    const reads = children.filter((c) => c.tool === "read_accessibility_tree").length;
+    const runs = children.filter((c) => c.tool === "run_applescript").length;
+    const phrases = [];
+    if (reads) phrases.push("read screen");
+    if (runs) phrases.push(runs > 1 ? "ran scripts" : "ran script");
+    const s = phrases.join(" and ") || "worked";
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  // Sets a disclosure's own summary text (the first .status-text is the element's own summary,
+  // ahead of any nested children's).
   function setStatusText(details, text) {
     details.querySelector(".status-text").textContent = text;
   }
@@ -554,7 +593,37 @@
     let reply = null; // the current assistant bubble being streamed into
     let replyText = "";
     let gotContent = false;
+    // A run of consecutive tool calls, collapsed into one group once there are two or more.
+    let run = null; // { children: [entry...], group: <details>|null }
     const clearThinking = () => { if (thinking) { thinking.remove(); thinking = null; } };
+    const endRun = () => { run = null; };
+
+    // Place a new tool-call line. The first in a run sits at top level; the second promotes the
+    // pair into a group (moving the first inside); later ones append to that group.
+    function addToolCall(entry) {
+      const child = createStatusDetails("Working…");
+      entry.details = child;
+      renderToolPending(child, entry.tool, entry.input);
+      if (!run) {
+        messages.appendChild(child);
+        run = { children: [entry], group: null };
+      } else if (!run.group) {
+        const group = createGroupDetails();
+        const first = run.children[0].details;
+        messages.insertBefore(group, first);
+        const gb = group.querySelector(".group-body");
+        gb.appendChild(first);
+        gb.appendChild(child);
+        run.group = group;
+        run.children.push(entry);
+        setStatusText(group, groupSummary(run.children));
+      } else {
+        run.group.querySelector(".group-body").appendChild(child);
+        run.children.push(entry);
+        setStatusText(run.group, groupSummary(run.children));
+      }
+      scrollToBottom();
+    }
 
     try {
       await streamEvents("/api/stream", { prompt: text, model }, (ev) => {
@@ -562,10 +631,10 @@
           case "tool-call": {
             gotContent = true;
             clearThinking();
-            reply = null; replyText = ""; // a following reply starts a fresh bubble below this call
-            const details = addStatusMessage("Working…");
-            renderToolPending(details, ev.tool, ev.input);
-            tools.set(ev.id, { details, tool: ev.tool, input: ev.input });
+            reply = null; replyText = ""; // a following reply starts a fresh bubble below this run
+            const entry = { id: ev.id, tool: ev.tool, input: ev.input };
+            addToolCall(entry);
+            tools.set(ev.id, entry);
             break;
           }
           case "tool-result": {
@@ -581,6 +650,7 @@
           case "text": {
             gotContent = true;
             clearThinking();
+            endRun(); // narration ends the current run of tool calls
             if (!reply) reply = addAssistantMessage("");
             replyText += ev.text;
             reply.innerHTML = renderMarkdown(replyText);
@@ -590,6 +660,7 @@
           case "error": {
             gotContent = true;
             clearThinking();
+            endRun();
             addAssistantMessage(ev.error, true);
             break;
           }
