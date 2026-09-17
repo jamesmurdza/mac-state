@@ -64,3 +64,29 @@ src/lib/             Sandbox handling, the agent loop, and other shared logic
 tests/               Unit, integration, and end-to-end tests
 tools/               Dev scripts
 ```
+
+## How the agent works
+
+The agent loop lives in `src/lib/agent.ts` and drives the sandbox purely through its GUI, the way
+a person would — there's no shell or scripting shortcut available to it. Claude (via the Vercel AI
+SDK) is given five tools bound to the current sandbox: `read_accessibility_tree` (a pruned JSON
+summary of what's on screen), `open_app`, `click_element`, `type_text`, and `press_keys`. The
+system prompt steers it through a simple loop — **look, act, look** — and most action tools return
+the updated screen right after acting, so the model rarely needs a separate read in between. A
+turn runs for up to 40 tool-calling steps before it's cut off as a runaway guard.
+
+Two entry points share that same loop: `runAgent` runs it to completion and returns the whole turn
+at once (used by `POST /api/run`), and `streamAgent` yields each tool call, result, and reply chunk
+as it happens (used by `POST /api/stream`, over a hand-rolled SSE protocol the client parses with a
+plain `fetch()` + `ReadableStream` reader — no `EventSource`, no `useChat`).
+
+Because the app is stateless, neither entry point owns a sandbox or a conversation the way a
+typical chat backend would. Each call takes a `SandboxRef` (a small mutable box holding the current
+sandbox handle) and the full prior `history` as plain arguments; every tool call goes through
+`withSandbox()`, which retries once against a freshly created sandbox if the gateway reports the
+current one gone (timed out or otherwise deleted) — reconnecting is cheap because
+`attachSandbox(sandboxId)` rebuilds a working handle from just the id, with no network call, since
+the gateway's own API only ever needs the id in the URL path. Every event the agent emits carries
+the sandbox it's currently using and, once done, the full updated conversation, so the client (the
+only place any of this is actually remembered) can just replace its local copy wholesale rather
+than track diffs.
