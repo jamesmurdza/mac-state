@@ -2,6 +2,7 @@
 
 import type { ModelMessage } from "ai";
 import { useEffect, useRef, useState } from "react";
+import { ensureInitialSandbox } from "../lib/client-sandbox";
 import { DEFAULT_MODEL_CHOICE, type ModelChoice } from "../lib/llm";
 import { renderMarkdown } from "../lib/markdown";
 import type { SandboxDescriptor } from "../lib/sandbox-handle";
@@ -52,7 +53,6 @@ export function ChatPanel({
   onHistoryUpdate,
   onSandboxUpdate,
   connectError,
-  ready,
 }: {
   sandbox: SandboxDescriptor | null;
   history: ModelMessage[];
@@ -60,10 +60,6 @@ export function ChatPanel({
   onSandboxUpdate: (descriptor: SandboxDescriptor) => void;
   /** Set once if the initial /api/status call failed; shown as a one-off centered notice. */
   connectError?: string | null;
-  /** False until the initial /api/status call has settled (success or error). The composer is
-   *  disabled until then so send() can never race that call with its own `sandbox: null` request
-   *  -- see the comment on this prop's call site in MacStateApp.tsx. */
-  ready: boolean;
 }) {
   const [items, setItems] = useState<TranscriptItem[]>([]);
   const [model, setModel] = useState<ModelChoice>(DEFAULT_MODEL_CHOICE);
@@ -74,9 +70,6 @@ export function ChatPanel({
   const nextId = (prefix: string) => `${prefix}-${idCounter.current++}`;
   const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  // Latest sandbox/history without forcing send() to be redeclared every render.
-  const latest = useRef({ sandbox, history });
-  latest.current = { sandbox, history };
 
   useEffect(() => {
     const el = messagesRef.current;
@@ -89,8 +82,11 @@ export function ChatPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fire once per distinct error message
   }, [connectError]);
 
+  // `send` is redeclared fresh every render (not useCallback-wrapped), and every place that calls
+  // it (the button's onClick, the textarea's onKeyDown) is also a fresh closure created on that
+  // same render -- so `sandbox`/`history` below are already the current render's props by the
+  // time this runs. No ref-mirroring needed to avoid a stale closure; there isn't one.
   async function send() {
-    if (!ready) return; // belt-and-braces: the composer is disabled while !ready, so this shouldn't fire
     const ta = textareaRef.current;
     const text = ta?.value.trim() ?? "";
     if (!text) return;
@@ -119,11 +115,20 @@ export function ChatPanel({
     };
 
     try {
-      const { sandbox: sb, history: hist } = latest.current;
+      // If the initial /api/status call hasn't resolved yet (this is the very first message, sent
+      // before that finished), await the exact same shared promise it's using rather than firing
+      // off an independent `sandbox: null` request -- that's what actually prevents a second,
+      // wasted sandbox from being created, not just the fact that this button isn't disabled.
+      const sb = sandbox ?? (await ensureInitialSandbox());
+      if (!sandbox) onSandboxUpdate(sb);
+
       await streamEvents(
         "/api/stream",
-        { prompt: text, model, sandbox: sb, history: hist },
+        { prompt: text, model, sandbox: sb, history },
         (ev) => {
+          // Every event carries the sandbox this turn is actually using right now -- always sync
+          // to it, not just for a dedicated event type. See the comment on AgentEvent in agent.ts.
+          onSandboxUpdate(ev.sandbox);
           switch (ev.t) {
             case "tool-call": {
               gotContent = true;
@@ -156,9 +161,6 @@ export function ChatPanel({
               });
               break;
             }
-            case "sandbox":
-              onSandboxUpdate({ sandboxId: ev.sandboxId, host: ev.host, vncUrl: ev.vncUrl });
-              break;
             case "error": {
               gotContent = true;
               clearThinking();
@@ -169,10 +171,6 @@ export function ChatPanel({
             }
             case "done":
               onHistoryUpdate(ev.history);
-              // Always current, not just on a mid-turn rotation -- this is what lets a turn that
-              // never called a tool (e.g. a plain "hi") still tell the client which sandbox got
-              // used, so the next turn reuses it instead of silently creating yet another one.
-              onSandboxUpdate({ sandboxId: ev.sandbox.sandboxId, host: ev.sandbox.host, vncUrl: ev.sandbox.vncUrl });
               break;
           }
         },
@@ -248,11 +246,10 @@ export function ChatPanel({
         <textarea
           id="prompt"
           ref={textareaRef}
-          placeholder={ready ? "Write an instruction..." : "Connecting to a sandbox…"}
+          placeholder="Write an instruction..."
           spellCheck={false}
           aria-label="Write an instruction..."
           rows={1}
-          disabled={!ready}
           onInput={(e) => {
             const ta = e.currentTarget;
             ta.style.height = "auto";
@@ -268,7 +265,7 @@ export function ChatPanel({
               ta.dispatchEvent(new Event("input", { bubbles: true }));
               return;
             }
-            if (!running && ready) void send(); // don't submit a new prompt while a turn is running, or before a sandbox is known
+            if (!running) void send(); // don't submit a new prompt while a turn is running
           }}
         />
         <select

@@ -11,9 +11,10 @@ export const runtime = "nodejs";
  * a non-200 status — except sandbox resolution, which happens before the stream opens.
  *
  * Wire format is unchanged from the original Hono `streamSSE` implementation (`data: <json>\n\n`
- * frames of the same AgentEvent union), plus two additive frame types: `sandbox` (the handle this
- * turn is using changed) and `done`'s new `history` field (the full updated conversation, since
- * nothing server-side remembers it between requests).
+ * frames of the same AgentEvent union), plus two additive fields every frame now carries: `sandbox`
+ * (whatever handle this turn is using *right now* -- not just when it changes, so a turn that made
+ * no tool calls at all still tells the client which sandbox got used) and, on `done` specifically,
+ * the full updated `history` (since nothing server-side remembers it between requests).
  */
 export async function POST(req: Request): Promise<Response> {
   const body = await req.json().catch(() => null);

@@ -158,21 +158,23 @@ export interface SandboxRef {
 
 /**
  * Run `fn` against `ref.current`. If it fails with a "gone" error (the sandbox timed out or was
- * otherwise deleted), create a fresh sandbox, swap it into `ref.current`, call `onRotate` (so the
- * caller can tell a client its sandbox changed), and retry `fn` exactly once against the new
- * handle. `create` is injectable so this is unit-testable without a real network call.
+ * otherwise deleted), create a fresh sandbox, swap it into `ref.current`, and retry `fn` exactly
+ * once against the new handle. Callers that need to tell a client the sandbox changed just read
+ * `ref.current` after this resolves (e.g. `toDescriptor(ref.current)`) -- there's no separate
+ * rotation-notification callback to wire up, since `ref.current` is always the single source of
+ * truth for "which sandbox did this actually end up using." `create` is injectable so this is
+ * unit-testable without a real network call.
  */
 export async function withSandbox<T>(
   ref: SandboxRef,
   fn: (handle: SandboxHandle) => Promise<T>,
-  opts?: { onRotate?: (handle: SandboxHandle) => void; create?: () => Promise<SandboxHandle> },
+  opts?: { create?: () => Promise<SandboxHandle> },
 ): Promise<T> {
   try {
     return await fn(ref.current);
   } catch (err) {
     if (!isGone(err)) throw err;
     ref.current = await (opts?.create ?? createSandbox)();
-    opts?.onRotate?.(ref.current);
     return fn(ref.current);
   }
 }

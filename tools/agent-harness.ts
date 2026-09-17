@@ -49,8 +49,15 @@ try {
   const pending = new Map<string, { tool: string }>();
   const t0 = Date.now();
   let replyBuf = "";
+  let lastSandboxId = sandboxRef.current.sandboxId;
   for await (const ev of streamAgent({ prompt, modelChoice, sandboxRef, history: [] })) {
     const dt = ((Date.now() - t0) / 1000).toFixed(1).padStart(5);
+    // Every event carries the sandbox currently in use; log it only when it actually changes
+    // (a tool call found its sandbox gone mid-turn and streamAgent transparently recreated it).
+    if (ev.sandbox.sandboxId !== lastSandboxId) {
+      console.log(`[${dt}s] ↻ sandbox recreated (the old one timed out): ${ev.sandbox.sandboxId}`);
+      lastSandboxId = ev.sandbox.sandboxId;
+    }
     if (ev.t === "tool-call") {
       stepN++;
       pending.set(ev.id, { tool: ev.tool });
@@ -65,8 +72,6 @@ try {
     } else if (ev.t === "tool-error") {
       console.log(`[${dt}s]        ✗ ERROR → ${short(ev.error, 400)}`);
       await snap("error");
-    } else if (ev.t === "sandbox") {
-      console.log(`[${dt}s] ↻ sandbox recreated (the old one timed out): ${ev.sandboxId}`);
     } else if (ev.t === "text") {
       replyBuf += ev.text;
     } else if (ev.t === "error") {
