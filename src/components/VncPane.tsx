@@ -43,7 +43,14 @@ export function VncPane({
 
   const dotClass = state === "connecting" ? "dot busy" : state === "connected" ? "dot on" : "dot err";
   const chipText = state === "connecting" ? "connecting…" : state === "connected" ? "macOS sandbox" : "Disconnected";
-  const showSpinner = !!vncUrl && !spinnerHidden;
+  // The static page's spinner was visible by default and only explicitly hidden once the iframe
+  // had loaded and settled -- i.e. shown for the whole "don't have anything to look at yet"
+  // window, including before vncUrl even exists. Gating on `!!vncUrl` (an earlier version of this
+  // component did) inverts that: vncUrl is null for the entire "connecting" state, so the spinner
+  // was suppressed exactly when it was most needed, leaving a bare black .stage background with
+  // only the chip's "connecting…" text. Gate on `state` instead: show for anything short of an
+  // outright connection failure (which gets the disconnected overlay instead), until spinnerHidden.
+  const showSpinner = state !== "error" && !spinnerHidden;
 
   return (
     <section className="stage">
@@ -71,13 +78,22 @@ export function VncPane({
         <span id="dot" className={dotClass} />
         <span id="chip-text">{chipText}</span>
       </div>
-      <a id="vnc-tab" className="vnc-tab" href={vncUrl ?? "#"} target="_blank" rel="noopener" hidden={!vncUrl} title="Open in a new tab" aria-label="Open in a new tab">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-          <path d="M15 3h6v6" />
-          <path d="M10 14 21 3" />
-        </svg>
-      </a>
+      {/* Conditionally rendered rather than `hidden={!vncUrl}`: the native `hidden` attribute
+          loses to this element's own `display: grid` in globals.css -- author-stylesheet rules
+          beat the UA stylesheet's `[hidden]{display:none}` at equal (or lower) specificity
+          regardless of source order, so the attribute alone doesn't actually hide it. The
+          pre-port static page had the identical `hidden` + `display: grid` combination and (as
+          far as I can tell from the markup) the identical bug; it just never fired for long
+          enough to notice there. */}
+      {vncUrl && (
+        <a id="vnc-tab" className="vnc-tab" href={vncUrl} target="_blank" rel="noopener" title="Open in a new tab" aria-label="Open in a new tab">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+            <path d="M15 3h6v6" />
+            <path d="M10 14 21 3" />
+          </svg>
+        </a>
+      )}
     </section>
   );
 }
