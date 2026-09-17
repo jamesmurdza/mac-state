@@ -2,34 +2,36 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText, type ModelMessage, stepCountIs, streamText, tool } from "ai";
 import { z } from "zod";
 import { MODEL_IDS, type ModelChoice } from "./llm.js";
-import { openApp, runAppleScript, uiAction, uiTreeSummary } from "./sandbox.js";
+import { clickElement, openApp, pressKeys, typeText, uiTreeSummary } from "./sandbox.js";
 import type { SandboxSession } from "./session.js";
 
 /**
- * Bound on tool-calling rounds per user turn. A realistic worst case is inspect→run a few
- * times over plus a final text-only step; 10 leaves margin for a retry-after-error while
- * capping both token cost (each step resends the growing transcript) and the number of real
- * side effects (osascript runs click/type on a live VM) one message can trigger.
+ * Bound on tool-calling rounds per user turn — a runaway guard, not a target. Real GUI tasks
+ * (open an app, navigate a multi-step sheet, fill fields, run) can take 20-30 inspect/act steps,
+ * so this is generous; the loop normally ends earlier when the model stops calling tools.
  */
-export const MAX_AGENT_STEPS = 10;
+export const MAX_AGENT_STEPS = 40;
 
-export const AGENT_SYSTEM_PROMPT = `You accomplish the user's instruction on a fresh macOS 15 virtual machine using the tools available. The machine is logged in as a normal user; Automation and Accessibility permissions are already granted.
+export const AGENT_SYSTEM_PROMPT = `You accomplish the user's instruction on a fresh macOS 15 virtual machine by driving its GUI with the tools available. The machine is logged in as a normal user; Automation and Accessibility permissions are already granted.
 
-- Open apps with open_app — it launches/focuses the app, waits until it actually shows a window, and returns what's on screen. Don't use run_applescript "activate" plus a guessed delay. If open_app's result has a "note" that the app is frontmost with no window, or shows a dialog in windows, deal with that (e.g. click the dialog, or open_app again) before assuming the app is ready.
-- Call read_accessibility_tree to see what's on screen: it lists each on-screen window (with its app, role, and title — including dialogs/sheets/alerts) and, per element, a role and label. Use those exact values with the interaction tools — never build UI element paths by hand or guess element indices. To wait for something, just read the tree again until it appears.
-- To interact, prefer the semantic tools over raw scripting:
-  - click_element to click a button, menu item, checkbox, tab, etc.
-  - set_field_value to type into a text field or set a control's value.
-  Pass the exact app, role, and label you saw in the tree. If a call returns "ambiguous", pick from the returned candidates by calling again with index. If "not-found", re-read the tree and try again.
-- Use run_applescript only as an escape hatch — for an app's own scripting (TextEdit "make new document", Safari "open location", Finder "make new file") or anything the semantic tools don't cover.
-- Keep going — inspecting and acting as needed — until the instruction is fully done, then reply with one short sentence describing what you did. If you can't complete it in the requested app (no window appears, a dialog blocks it, it won't launch), say so plainly — do not switch to a different method like the shell and claim success.`;
+Your loop is: look → act → look. Never act blind. open_app, click_element, type_text and press_keys each RETURN the updated screen (a "screen" field) right after acting, so you normally do NOT need a separate read_accessibility_tree — just look at what the action returned and decide the next step.
+
+- open_app to launch or focus an app. It waits until the app actually shows a window and returns what's on screen. If its "note" says the app is frontmost with no window, or a dialog appears, handle that before continuing.
+- read_accessibility_tree to look again without acting (e.g. to wait for something to finish): it returns the frontmost app's "menus" (menu-bar titles) and each on-screen window (including dialogs and sheets) with its elements' roles and labels.
+- click_element to click anything by its label from the tree — a button, tab, checkbox, table cell, template/icon, or a menu-bar menu. It works even for SwiftUI controls. If it returns "ambiguous", pick from the candidates with index; if "not-found", read the tree again (the label may differ, or the element isn't up yet). To use a menu: click_element the menu name (e.g. "File" or "Product") to open it, read the tree, then click_element the item (e.g. "Run").
+- type_text to type into a field — click_element the field first to focus it, then type_text.
+- press_keys for keys and shortcuts: "return"/"escape"/"tab" to confirm/dismiss/move, and app shortcuts like "cmd+shift+n" (Xcode: New Project), "cmd+r" (Run), "cmd+s" (Save). Use whichever is most reliable — a menu, a click, or a shortcut.
+
+You drive the real GUI only — there is no shell, terminal, or scripting shortcut. Do the task the way a person would: through windows, menus, buttons and the keyboard. If a control isn't where you expect, look again (read the tree) and adjust — don't give up and don't invent another route.
+
+Keep going, one step at a time, until the instruction is FULLY done — including any final step like actually running or saving. Do not stop after setup or assume a later step worked; look at each action's returned screen to verify it. Only when it's genuinely complete, reply with one short sentence describing what you did. If you truly cannot proceed (an app won't launch, a required control never appears after looking again), say so plainly and explain exactly where you got stuck — never claim success you didn't verify.`;
 
 /** The tools the model can call, each bound to the live sandbox session. */
 function makeTools(session: SandboxSession) {
   return {
     read_accessibility_tree: tool({
       description:
-        "Get a pruned JSON summary of what's currently on screen: running apps and, per on-screen window (including dialogs and sheets, each with its role and title), its accessibility tree by role and label. Pass an element's exact app, role, and label to click_element / set_field_value. A `note` may flag an app that's frontmost with no window.",
+        "Get a pruned JSON summary of what's currently on screen: running apps, the frontmost app's menu-bar menus, and each on-screen window (including dialogs and sheets, with its role and title) with its elements by role and label. Pass an element's label to click_element. A `note` may flag an app that's frontmost with no window.",
       inputSchema: z.object({
         summary: z
           .string()
@@ -41,30 +43,33 @@ function makeTools(session: SandboxSession) {
     }),
     click_element: tool({
       description:
-        'Click a UI element (button, menu item, checkbox, tab, …) located by its role and label — the code finds it for you, so you never build UI paths. Copy the exact app/role/label from read_accessibility_tree. Returns { status } of "ok", "not-found", "ambiguous" (with a candidates list — retry passing index), or "error". Prefer this over run_applescript for clicking.',
+        'Click an on-screen element (button, menu item, tab, checkbox, table cell, template icon, or a menu-bar menu like "File"/"Product") by its label. It finds the element in the live UI tree and clicks its center, so it works for standard and SwiftUI apps alike. Copy the exact label from read_accessibility_tree. Returns { status }: "ok", "not-found", "ambiguous" (with a candidates list — retry passing index), or "error". To use a menu, click the menu name to open it, read the tree, then click the item.',
       inputSchema: z.object({
         summary: z.string().describe('Short present-tense description, e.g. "Clicking the Save button".'),
-        app: z.string().describe("The app/process that owns the element (the window's app in the tree)."),
-        role: z.string().optional().describe('Element role as shown in the tree, e.g. "button", "menu item". Optional but helps.'),
-        label: z.string().describe("The element's visible label/name, exactly as shown in the tree."),
+        label: z.string().describe("The element's visible label/name/text, as shown in the tree."),
+        role: z.string().optional().describe('Element role to disambiguate, e.g. "button", "menu item". Optional.'),
+        app: z.string().optional().describe("Restrict to this app's windows. Optional."),
         index: z.number().int().optional().describe("1-based choice among candidates after an ambiguous result."),
       }),
-      execute: ({ app, role, label, index }) =>
-        session.use((s) => uiAction(s, { app, role, label, index, action: "click" })),
+      execute: ({ app, role, label, index }) => session.use((s) => clickElement(s, { app, role, label, index })),
     }),
-    set_field_value: tool({
+    type_text: tool({
       description:
-        "Set the value of a text field or control located by role and label (same matching as click_element). Use for typing into fields instead of System Events keystrokes.",
+        "Type text into the control that currently has keyboard focus. Click the field with click_element first to focus it. Uses real keystrokes.",
       inputSchema: z.object({
         summary: z.string().describe('Short present-tense description, e.g. "Entering the project name".'),
-        app: z.string().describe("The app/process that owns the element."),
-        role: z.string().optional().describe('Element role, e.g. "text field". Optional but helps.'),
-        label: z.string().describe("The field's label/name, exactly as shown in the tree."),
-        value: z.string().describe("The value to write into the field."),
-        index: z.number().int().optional().describe("1-based choice among candidates after an ambiguous result."),
+        text: z.string().describe("The text to type."),
       }),
-      execute: ({ app, role, label, value, index }) =>
-        session.use((s) => uiAction(s, { app, role, label, value, index, action: "set" })),
+      execute: ({ text }) => session.use((s) => typeText(s, text)),
+    }),
+    press_keys: tool({
+      description:
+        'Press a key or keyboard shortcut, e.g. "return", "escape", "tab", "cmd+shift+n" (new project in Xcode), "cmd+r" (run), "cmd+s" (save), "cmd+a" (select all). Use for shortcuts and for confirming/dismissing dialogs.',
+      inputSchema: z.object({
+        summary: z.string().describe('Short present-tense description, e.g. "Running the project".'),
+        keys: z.string().describe('The key or combo, e.g. "return" or "cmd+shift+n".'),
+      }),
+      execute: ({ keys }) => session.use((s) => pressKeys(s, keys)),
     }),
     open_app: tool({
       description:
@@ -74,19 +79,6 @@ function makeTools(session: SandboxSession) {
         app: z.string().describe('The app to open, e.g. "Xcode", "Safari", "TextEdit".'),
       }),
       execute: ({ app }) => session.use((s) => openApp(s, app)),
-    }),
-    run_applescript: tool({
-      description:
-        'Escape hatch: run an arbitrary AppleScript block with osascript (launch/activate an app, app-specific scripting, or anything the semantic tools don\'t cover). Returns stdout, stderr, and exit code. Prefer click_element / set_field_value for interacting with on-screen controls.',
-      inputSchema: z.object({
-        summary: z
-          .string()
-          .describe(
-            'A short present-tense description of what this step does, shown live to the user, e.g. "Opening TextEdit".',
-          ),
-        script: z.string().describe("Complete, runnable AppleScript source. No markdown fences."),
-      }),
-      execute: ({ script }) => session.use((s) => runAppleScript(s, script)),
     }),
   };
 }
@@ -115,11 +107,11 @@ function agentRequest(messages: ModelMessage[], modelChoice: ModelChoice, sessio
 }
 
 export type ToolName =
-  | "run_applescript"
   | "read_accessibility_tree"
   | "open_app"
   | "click_element"
-  | "set_field_value";
+  | "type_text"
+  | "press_keys";
 
 export interface AgentStep {
   tool: ToolName;
