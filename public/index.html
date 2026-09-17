@@ -122,8 +122,17 @@
     padding: 10px 13px; border-radius: 14px; white-space: pre-wrap; word-break: break-word; box-shadow: var(--shadow);
   }
   .msg-user .bubble { background: var(--bubble-user); border-bottom-right-radius: 4px; }
-  .msg-assistant .bubble { background: none; box-shadow: none; padding: 2px 2px; }
+  .msg-assistant .bubble { background: none; box-shadow: none; padding: 2px 2px; white-space: normal; }
   .msg-assistant .bubble.err { color: var(--red); }
+  /* rendered markdown in the assistant reply */
+  .msg-assistant .bubble p { margin: 0 0 8px; }
+  .msg-assistant .bubble p:last-child { margin-bottom: 0; }
+  .msg-assistant .bubble ul, .msg-assistant .bubble ol { margin: 4px 0; padding-left: 20px; }
+  .msg-assistant .bubble li { margin: 2px 0; }
+  .msg-assistant .bubble strong { font-weight: 600; }
+  .msg-assistant .bubble code {
+    font-family: var(--mono); font-size: .92em; background: var(--panel-2); padding: 1px 5px; border-radius: 5px;
+  }
 
   /* run status: plain text, no badge — click to reveal the script below it. Looks the same
      whether the run succeeded or failed; only the wording changes. */
@@ -288,7 +297,10 @@
     wrap.className = "msg msg-assistant";
     const bubble = document.createElement("div");
     bubble.className = "bubble" + (isError ? " err" : "");
-    bubble.textContent = text;
+    // The agent replies conversationally and often uses markdown; render a safe subset so
+    // characters like ** and - don't show raw. Errors are plain text, kept as-is.
+    if (isError) bubble.textContent = text;
+    else bubble.innerHTML = renderMarkdown(text);
     wrap.appendChild(bubble);
     messages.appendChild(wrap);
     scrollToBottom();
@@ -296,6 +308,40 @@
 
   function escapeHtml(s) {
     return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  }
+
+  // Render a safe subset of markdown. Input is HTML-escaped first, so the only tags in the
+  // output are the fixed set introduced here — no HTML from the model reaches the DOM.
+  function renderInline(text) {
+    const codes = [];
+    text = text.replace(/`([^`]+)`/g, (_, c) => `\uE000${codes.push(c) - 1}\uE000`);
+    text = text.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    text = text.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+    text = text.replace(/(^|[^\w])_([^_\n]+)_/g, "$1<em>$2</em>");
+    text = text.replace(/\uE000(\d+)\uE000/g, (_, i) => `<code>${codes[i]}</code>`);
+    return text;
+  }
+
+  function renderMarkdown(md) {
+    const lines = escapeHtml(md).split("\n");
+    const out = [];
+    let list = null;
+    let para = [];
+    const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+    const flushPara = () => { if (para.length) { out.push(`<p>${para.map(renderInline).join("<br>")}</p>`); para = []; } };
+    for (const raw of lines) {
+      const line = raw.trim();
+      if (!line) { flushPara(); closeList(); continue; }
+      const h = /^#{1,6}\s+(.*)$/.exec(line);
+      const ul = /^[-*]\s+(.*)$/.exec(line);
+      const ol = /^\d+\.\s+(.*)$/.exec(line);
+      if (h) { flushPara(); closeList(); out.push(`<p><strong>${renderInline(h[1])}</strong></p>`); }
+      else if (ul) { flushPara(); if (list !== "ul") { closeList(); out.push("<ul>"); list = "ul"; } out.push(`<li>${renderInline(ul[1])}</li>`); }
+      else if (ol) { flushPara(); if (list !== "ol") { closeList(); out.push("<ol>"); list = "ol"; } out.push(`<li>${renderInline(ol[1])}</li>`); }
+      else { closeList(); para.push(line); }
+    }
+    flushPara(); closeList();
+    return out.join("");
   }
 
   async function postJson(url, body) {
