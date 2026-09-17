@@ -37,8 +37,23 @@
   body {
     margin: 0; color: var(--ink); font: 13px/1.55 var(--mono); background: var(--bg);
   }
-  .app { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(320px, 1fr); height: 100vh; }
-  @media (max-width: 860px) { .app { grid-template-columns: 1fr; grid-template-rows: 42vh 1fr; height: 100vh; } }
+  .app { display: grid; grid-template-columns: minmax(280px, var(--split-col, 58%)) 6px minmax(320px, 1fr); height: 100vh; }
+  @media (max-width: 860px) {
+    .app { grid-template-columns: 1fr; grid-template-rows: minmax(160px, var(--split-row, 42vh)) 6px minmax(160px, 1fr); height: 100vh; }
+  }
+
+  /* ---------- divider: thin line, wider drag target ---------- */
+  .divider { position: relative; background: transparent; z-index: 5; touch-action: none; }
+  .divider::after {
+    content: ""; position: absolute; top: 0; bottom: 0; left: 50%; width: 1px; transform: translateX(-50%);
+    background: var(--line-2);
+  }
+  .divider:hover::after, .divider.dragging::after { background: var(--accent); }
+  .divider { cursor: col-resize; }
+  @media (max-width: 860px) {
+    .divider { cursor: row-resize; }
+    .divider::after { top: 50%; left: 0; right: 0; bottom: auto; width: auto; height: 1px; transform: translateY(-50%); }
+  }
 
   /* ---------- left: VNC stage ---------- */
   .stage { position: relative; background: #000; display: flex; min-width: 0; min-height: 0; }
@@ -58,7 +73,7 @@
   .chip a:hover { opacity: 1; }
 
   /* ---------- right: chat ---------- */
-  .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; border-left: 1px solid var(--line); background: var(--bg); }
+  .chat { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
   .messages { flex: 1; overflow-y: auto; padding: 18px 16px; display: flex; flex-direction: column; gap: 14px; }
   .msg { max-width: 92%; }
   .msg-system { align-self: center; max-width: 100%; color: var(--ink-3); font-size: 11px; text-align: center; padding: 2px 0; }
@@ -132,7 +147,7 @@
 </style>
 </head>
 <body>
-<div class="app">
+<div class="app" id="app">
   <section class="stage">
     <iframe id="vnc" title="Sandbox screen (live VNC)" allow="clipboard-read; clipboard-write"></iframe>
     <div class="chip">
@@ -141,6 +156,7 @@
       <a id="vnc-tab" href="#" target="_blank" rel="noopener" hidden title="Open in a new tab">↗</a>
     </div>
   </section>
+  <div class="divider" id="divider" role="separator" aria-orientation="vertical" aria-label="Resize panels" tabindex="0"></div>
   <section class="chat">
     <div class="messages" id="messages"></div>
     <form class="composer" id="composer">
@@ -321,6 +337,85 @@
   });
 
   loadStatus();
+
+  // ---------- draggable divider ----------
+  // Pointer capture keeps move/up events targeted at the divider even while the
+  // pointer is over the cross-origin VNC iframe, so no full-page overlay is needed.
+  (function setupDivider() {
+    const app = $("app");
+    const divider = $("divider");
+    const stackedQuery = window.matchMedia("(max-width: 860px)");
+    const isStacked = () => stackedQuery.matches;
+    const MIN = 160; // px kept clear on each side
+
+    try {
+      const col = localStorage.getItem("mac-state-split-col");
+      const row = localStorage.getItem("mac-state-split-row");
+      if (col) app.style.setProperty("--split-col", col);
+      if (row) app.style.setProperty("--split-row", row);
+    } catch {}
+
+    let dragging = false;
+
+    function onMove(e) {
+      if (!dragging) return;
+      const rect = app.getBoundingClientRect();
+      if (isStacked()) {
+        const h = Math.min(Math.max(e.clientY - rect.top, MIN), rect.height - MIN - 6);
+        app.style.setProperty("--split-row", `${h}px`);
+      } else {
+        const w = Math.min(Math.max(e.clientX - rect.left, MIN), rect.width - MIN - 6);
+        app.style.setProperty("--split-col", `${w}px`);
+      }
+    }
+
+    function onUp(e) {
+      if (!dragging) return;
+      dragging = false;
+      divider.classList.remove("dragging");
+      divider.releasePointerCapture(e.pointerId);
+      try {
+        if (isStacked()) localStorage.setItem("mac-state-split-row", app.style.getPropertyValue("--split-row"));
+        else localStorage.setItem("mac-state-split-col", app.style.getPropertyValue("--split-col"));
+      } catch {}
+    }
+
+    divider.addEventListener("pointerdown", (e) => {
+      dragging = true;
+      divider.classList.add("dragging");
+      divider.setPointerCapture(e.pointerId);
+    });
+    divider.addEventListener("pointermove", onMove);
+    divider.addEventListener("pointerup", onUp);
+    divider.addEventListener("pointercancel", onUp);
+
+    // Double-click resets to the default split.
+    divider.addEventListener("dblclick", () => {
+      app.style.removeProperty("--split-col");
+      app.style.removeProperty("--split-row");
+      try {
+        localStorage.removeItem("mac-state-split-col");
+        localStorage.removeItem("mac-state-split-row");
+      } catch {}
+    });
+
+    // Arrow keys nudge the split for keyboard users.
+    divider.addEventListener("keydown", (e) => {
+      const step = 24;
+      const stacked = isStacked();
+      const grow = stacked ? e.key === "ArrowDown" : e.key === "ArrowRight";
+      const shrink = stacked ? e.key === "ArrowUp" : e.key === "ArrowLeft";
+      if (!grow && !shrink) return;
+      e.preventDefault();
+      const rect = app.getBoundingClientRect();
+      const prop = stacked ? "--split-row" : "--split-col";
+      const size = stacked ? rect.height : rect.width;
+      const current = parseFloat(getComputedStyle(app).getPropertyValue(prop)) || size * (stacked ? 0.42 : 0.58);
+      const next = Math.min(Math.max(current + (grow ? step : -step), MIN), size - MIN - 6);
+      app.style.setProperty(prop, `${next}px`);
+      try { localStorage.setItem(stacked ? "mac-state-split-row" : "mac-state-split-col", `${next}px`); } catch {}
+    });
+  })();
 </script>
 </body>
 </html>
