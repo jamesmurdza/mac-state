@@ -70,6 +70,13 @@ export async function createSandbox(): Promise<SandboxHandle> {
  * as given (never re-fetched — there is no "look up a sandbox's vncUrl by id" endpoint to call).
  * The first real operation against the returned handle will throw a `404 `/`410 ` error (caught by
  * `isGone`) if the sandbox has actually been reaped, exactly like a fresh SDK object would.
+ *
+ * This function duplicates a slice of `use-computer-sdk`'s wire protocol by hand (endpoint paths,
+ * request/response shapes) below, because the SDK itself exposes no "reconnect by id" method.
+ * `use-computer-sdk` is pinned to an exact version in package.json (not a `^` range) specifically
+ * so a dependency bump is a deliberate, reviewed step: re-diff the endpoints below against the new
+ * version's `dist/sandbox.js`/`dist/http.js` before bumping, since nothing else will catch this
+ * function silently drifting out of sync with a changed gateway wire format.
  */
 export function attachSandbox(descriptor: SandboxDescriptor): SandboxHandle {
   const apiKey = requireEnv("USE_COMPUTER_API_KEY");
