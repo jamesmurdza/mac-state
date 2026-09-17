@@ -22,9 +22,19 @@ export function MacStateApp() {
   const [connectError, setConnectError] = useState<string | null>(null);
   const [history, setHistory] = useState<ModelMessage[]>([]);
   const [sysinfoOpen, setSysinfoOpen] = useState(false);
+  // Guards against React 19's dev-mode Strict Mode double-invoking this effect (mount -> cleanup
+  // -> mount again, to surface non-idempotent effects). Creating a sandbox is a real, expensive,
+  // non-idempotent side effect (unlike e.g. a GET that's safe to fire twice), so unlike the
+  // `cancelled` flag below -- which only discards a *stale response* -- this ref stops the second
+  // invocation from ever making the request at all. It intentionally survives the simulated
+  // unmount/remount (a plain module-level `let` would not), and is never reset, since this
+  // component mounts exactly once for the life of the page.
+  const statusRequested = useRef(false);
 
   // The sandbox is created on this first request; then the gateway's noVNC viewer is embedded.
   useEffect(() => {
+    if (statusRequested.current) return;
+    statusRequested.current = true;
     let cancelled = false;
     (async () => {
       setVncState("connecting");
