@@ -3,7 +3,7 @@ import Script from "next/script";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "macOS sandbox",
+  title: "macOS Computer Use",
   description: "Drive a use.computer macOS sandbox with a Claude agent.",
 };
 

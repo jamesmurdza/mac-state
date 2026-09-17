@@ -21,8 +21,8 @@ export function Divider({ appRef }: { appRef: React.RefObject<HTMLDivElement | n
     const isStacked = () => stackedQuery.matches;
 
     try {
-      const col = localStorage.getItem("mac-state-split-col");
-      const row = localStorage.getItem("mac-state-split-row");
+      const col = localStorage.getItem("macos-computer-use-split-col");
+      const row = localStorage.getItem("macos-computer-use-split-row");
       if (col) app.style.setProperty("--split-col", col);
       if (row) app.style.setProperty("--split-row", row);
     } catch {
@@ -49,8 +49,8 @@ export function Divider({ appRef }: { appRef: React.RefObject<HTMLDivElement | n
       divider.classList.remove("dragging");
       divider.releasePointerCapture(e.pointerId);
       try {
-        if (isStacked()) localStorage.setItem("mac-state-split-row", app.style.getPropertyValue("--split-row"));
-        else localStorage.setItem("mac-state-split-col", app.style.getPropertyValue("--split-col"));
+        if (isStacked()) localStorage.setItem("macos-computer-use-split-row", app.style.getPropertyValue("--split-row"));
+        else localStorage.setItem("macos-computer-use-split-col", app.style.getPropertyValue("--split-col"));
       } catch {
         // ignore
       }
@@ -68,8 +68,8 @@ export function Divider({ appRef }: { appRef: React.RefObject<HTMLDivElement | n
       app.style.removeProperty("--split-col");
       app.style.removeProperty("--split-row");
       try {
-        localStorage.removeItem("mac-state-split-col");
-        localStorage.removeItem("mac-state-split-row");
+        localStorage.removeItem("macos-computer-use-split-col");
+        localStorage.removeItem("macos-computer-use-split-row");
       } catch {
         // ignore
       }
@@ -90,7 +90,7 @@ export function Divider({ appRef }: { appRef: React.RefObject<HTMLDivElement | n
       const next = Math.min(Math.max(current + (grow ? step : -step), MIN), size - MIN - 6);
       app.style.setProperty(prop, `${next}px`);
       try {
-        localStorage.setItem(stacked ? "mac-state-split-row" : "mac-state-split-col", `${next}px`);
+        localStorage.setItem(stacked ? "macos-computer-use-split-row" : "macos-computer-use-split-col", `${next}px`);
       } catch {
         // ignore
       }
