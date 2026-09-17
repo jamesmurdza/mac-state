@@ -2,7 +2,7 @@ import { anthropic } from "@ai-sdk/anthropic";
 import { generateText, type ModelMessage, stepCountIs, streamText, tool } from "ai";
 import { z } from "zod";
 import { MODEL_IDS, type ModelChoice } from "./llm.js";
-import { runAppleScript, uiTreeSummary } from "./sandbox.js";
+import { runAppleScript, uiAction, uiTreeSummary } from "./sandbox.js";
 import type { SandboxSession } from "./session.js";
 
 /**
@@ -15,29 +15,21 @@ export const MAX_AGENT_STEPS = 10;
 
 export const AGENT_SYSTEM_PROMPT = `You accomplish the user's instruction on a fresh macOS 15 virtual machine using the tools available. The machine is logged in as a normal user; Automation and Accessibility permissions are already granted.
 
-- Call read_accessibility_tree when you need to know what's currently on screen before acting — don't guess blindly about what's open or how a window is laid out.
-- Call run_applescript to act. Bring an app to the front with: tell application "X" to activate. After launching an app, add "delay 1" before driving it. Type text or press keys only through System Events (keystroke, key code), after activating the target app. Prefer an app's own scripting (TextEdit "make new document", Safari "open location", Finder "make new file") over UI scripting. Do not display dialogs or wait for user input unless the request asks for it.
-- Keep going — inspecting the screen and running more scripts as needed — until the instruction is fully done, then reply with one short sentence describing what you did.`;
+- Call read_accessibility_tree to see what's on screen: it lists each on-screen window's app and, per element, a role and label. Use those exact values with the interaction tools — never build UI element paths by hand or guess element indices.
+- To interact, prefer the semantic tools over raw scripting:
+  - click_element to click a button, menu item, checkbox, tab, etc.
+  - set_field_value to type into a text field or set a control's value.
+  - wait_for_element to wait for something to appear instead of guessing a delay.
+  Pass the exact app, role, and label you saw in the tree. If a call returns "ambiguous", pick from the returned candidates by calling again with index. If "not-found", re-read the tree and try again.
+- Use run_applescript only as an escape hatch — to launch or activate an app (tell application "X" to activate), for an app's own scripting (TextEdit "make new document", Safari "open location", Finder "make new file"), or for anything the semantic tools don't cover. After launching an app, use wait_for_element rather than a fixed delay.
+- Keep going — inspecting, waiting, and acting as needed — until the instruction is fully done, then reply with one short sentence describing what you did.`;
 
-/** The two tools the model can call, each bound to the live sandbox session. */
+/** The tools the model can call, each bound to the live sandbox session. */
 function makeTools(session: SandboxSession) {
   return {
-    run_applescript: tool({
-      description:
-        "Run an AppleScript block on the sandbox with osascript. Returns its stdout, stderr, and exit code.",
-      inputSchema: z.object({
-        summary: z
-          .string()
-          .describe(
-            'A short present-tense description of what this step does, shown live to the user, e.g. "Opening TextEdit and typing the note".',
-          ),
-        script: z.string().describe("Complete, runnable AppleScript source. No markdown fences."),
-      }),
-      execute: ({ script }) => session.use((s) => runAppleScript(s, script)),
-    }),
     read_accessibility_tree: tool({
       description:
-        "Get a pruned JSON summary of what's currently on screen: running apps and, per on-screen window, its accessibility tree by role and label.",
+        "Get a pruned JSON summary of what's currently on screen: running apps and, per on-screen window, its accessibility tree by role and label. Pass an element's exact app, role, and label to click_element / set_field_value / wait_for_element.",
       inputSchema: z.object({
         summary: z
           .string()
@@ -46,6 +38,59 @@ function makeTools(session: SandboxSession) {
           ),
       }),
       execute: () => session.use((s) => uiTreeSummary(s)),
+    }),
+    click_element: tool({
+      description:
+        'Click a UI element (button, menu item, checkbox, tab, …) located by its role and label — the code finds it for you, so you never build UI paths. Copy the exact app/role/label from read_accessibility_tree. Returns { status } of "ok", "not-found", "ambiguous" (with a candidates list — retry passing index), or "error". Prefer this over run_applescript for clicking.',
+      inputSchema: z.object({
+        summary: z.string().describe('Short present-tense description, e.g. "Clicking the Save button".'),
+        app: z.string().describe("The app/process that owns the element (the window's app in the tree)."),
+        role: z.string().optional().describe('Element role as shown in the tree, e.g. "button", "menu item". Optional but helps.'),
+        label: z.string().describe("The element's visible label/name, exactly as shown in the tree."),
+        index: z.number().int().optional().describe("1-based choice among candidates after an ambiguous result."),
+      }),
+      execute: ({ app, role, label, index }) =>
+        session.use((s) => uiAction(s, { app, role, label, index, action: "click" })),
+    }),
+    set_field_value: tool({
+      description:
+        "Set the value of a text field or control located by role and label (same matching as click_element). Use for typing into fields instead of System Events keystrokes.",
+      inputSchema: z.object({
+        summary: z.string().describe('Short present-tense description, e.g. "Entering the project name".'),
+        app: z.string().describe("The app/process that owns the element."),
+        role: z.string().optional().describe('Element role, e.g. "text field". Optional but helps.'),
+        label: z.string().describe("The field's label/name, exactly as shown in the tree."),
+        value: z.string().describe("The value to write into the field."),
+        index: z.number().int().optional().describe("1-based choice among candidates after an ambiguous result."),
+      }),
+      execute: ({ app, role, label, value, index }) =>
+        session.use((s) => uiAction(s, { app, role, label, value, index, action: "set" })),
+    }),
+    wait_for_element: tool({
+      description:
+        "Wait until an element with the given role and label appears (polls up to timeoutSeconds). Use this instead of guessing a fixed delay after launching or navigating.",
+      inputSchema: z.object({
+        summary: z.string().describe('Short present-tense description, e.g. "Waiting for the dialog".'),
+        app: z.string().describe("The app/process to look in."),
+        role: z.string().optional().describe("Element role. Optional but helps."),
+        label: z.string().describe("The element's label/name to wait for."),
+        timeoutSeconds: z.number().optional().describe("Max seconds to wait (default 10)."),
+      }),
+      execute: ({ app, role, label, timeoutSeconds }) =>
+        session.use((s) => uiAction(s, { app, role, label, timeoutSeconds, action: "find" })),
+    }),
+    run_applescript: tool({
+      description:
+        'Escape hatch: run an arbitrary AppleScript block with osascript (launch/activate an app, app-specific scripting, or anything the semantic tools don\'t cover). Returns stdout, stderr, and exit code. Prefer click_element / set_field_value for interacting with on-screen controls.',
+      inputSchema: z.object({
+        summary: z
+          .string()
+          .describe(
+            'A short present-tense description of what this step does, shown live to the user, e.g. "Opening TextEdit".',
+          ),
+        script: z.string().describe("Complete, runnable AppleScript source. No markdown fences."),
+      }),
+      execute: ({ script }) => session.use((s) => runAppleScript(s, script)),
     }),
   };
 }
@@ -73,7 +118,12 @@ function agentRequest(messages: ModelMessage[], modelChoice: ModelChoice, sessio
   };
 }
 
-export type ToolName = "run_applescript" | "read_accessibility_tree";
+export type ToolName =
+  | "run_applescript"
+  | "read_accessibility_tree"
+  | "click_element"
+  | "set_field_value"
+  | "wait_for_element";
 
 export interface AgentStep {
   tool: ToolName;

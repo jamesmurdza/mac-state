@@ -531,7 +531,7 @@
   // The model's own present-tense description of a step ("Opening TextEdit…"), falling back to a
   // generic label if it didn't provide one.
   function stepLabel(tool, input) {
-    return (input && input.summary) || (tool === "run_applescript" ? "Running script…" : "Reading screen…");
+    return (input && input.summary) || (tool === "run_applescript" ? "Running script…" : "Working…");
   }
 
   // Render one status line per tool call the agent made. Same disclosure component either way:
@@ -549,7 +549,10 @@
         ? scriptHtml(script) + outputText(String(step.error))
         : scriptHtml(script) + execHtml(step.output);
     } else {
-      details.classList.toggle("failed", !!step.error);
+      // Semantic tools (click/set/wait) return { status } objects; read returns a JSON string.
+      const out = step.output;
+      const badStatus = out && typeof out === "object" && out.status && out.status !== "ok";
+      details.classList.toggle("failed", !!step.error || !!badStatus);
       body.innerHTML = step.error ? `<pre>${escapeHtml(String(step.error))}</pre>` : jsonHtml(step.output);
     }
   }

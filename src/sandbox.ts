@@ -196,6 +196,244 @@ export async function uiTreeSummary(sandbox: MacOSSandbox, opts: UiSummaryOption
   return json;
 }
 
+/** Escape a string for embedding inside an AppleScript double-quoted literal. */
+function escapeAppleScript(s: string): string {
+  return s
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t");
+}
+
+export interface UiActionOptions {
+  /** The app/process that owns the element (the window's `app` in uiTreeSummary). */
+  app: string;
+  /** Element role as shown in the tree (e.g. "button", "text field"); matched loosely. Optional. */
+  role?: string;
+  /** The element's visible label — matched against its name, description, then value. */
+  label: string;
+  /** find = locate/wait only; click = AXPress (falls back to click); set = write `value`. */
+  action: "find" | "click" | "set";
+  /** Value to write for the `set` action. */
+  value?: string;
+  /** 1-based choice among candidates, used to resolve a prior "ambiguous" result. */
+  index?: number;
+  /** How long to keep retrying while the element is absent (polling every 0.5s). */
+  timeoutSeconds?: number;
+}
+
+export interface UiActionResult {
+  status: "ok" | "not-found" | "ambiguous" | "error";
+  message?: string;
+  /** For an ambiguous match: the matching elements, so the model can retry with `index`. */
+  candidates?: string[];
+}
+
+/**
+ * One hardened recursive-search AppleScript, generated per call. It scopes to the front sheet or
+ * window of the target process, walks `entire contents` (every descendant, each read inside a
+ * try so a flaky element can't abort the search), matches by role (normalized: case-insensitive,
+ * "AX" prefix and spaces ignored, substring either way) and by label (exact on name/description/
+ * value, else a substring fallback), and returns a structured token: OK/FOUND, NOTFOUND,
+ * NOWINDOW, NOPROCESS, `AMBIGUOUS\t<n>` + one candidate per line, or `ERR\t<message>`. Clicks use
+ * `perform action "AXPress"` and fall back to `click`. The whole search retries on a poll until
+ * the element appears or the timeout elapses.
+ */
+function uiActionScript(opts: UiActionOptions): string {
+  const app = escapeAppleScript(opts.app);
+  const role = escapeAppleScript(opts.role ?? "");
+  const label = escapeAppleScript(opts.label);
+  const value = escapeAppleScript(opts.value ?? "");
+  const index = Number.isInteger(opts.index) && (opts.index as number) > 0 ? (opts.index as number) : 0;
+  const secs = opts.timeoutSeconds ?? (opts.action === "find" ? 10 : 4);
+  const tries = Math.max(1, Math.round(secs / 0.5));
+  return `on run
+  set _app to "${app}"
+  set _role to "${role}"
+  set _label to "${label}"
+  set _action to "${opts.action}"
+  set _value to "${value}"
+  set _index to ${index}
+  set _tries to ${tries}
+  tell application "System Events"
+    if not (exists process _app) then return "NOPROCESS"
+    try
+      set frontmost of process _app to true
+    end try
+  end tell
+  delay 0.2
+  set _res to "NOTFOUND"
+  repeat _tries times
+    set _res to my findAndAct(_app, _role, _label, _action, _value, _index)
+    if _res is not "NOTFOUND" and _res is not "NOWINDOW" then return _res
+    delay 0.5
+  end repeat
+  return _res
+end run
+
+on findAndAct(_app, _role, _label, _action, _value, _index)
+  tell application "System Events"
+    tell process _app
+      set _win to missing value
+      try
+        if (exists sheet 1 of window 1) then
+          set _win to sheet 1 of window 1
+        else if (exists window 1) then
+          set _win to window 1
+        end if
+      end try
+      if _win is missing value then return "NOWINDOW"
+      set _all to {}
+      try
+        set _all to entire contents of _win
+      end try
+      set _exact to {}
+      set _loose to {}
+      repeat with _i from 1 to (count of _all)
+        set _el to item _i of _all
+        set _r to ""
+        try
+          set _r to (role of _el) as text
+        end try
+        set _nm to ""
+        try
+          set _nm to (name of _el) as text
+        end try
+        set _ds to ""
+        try
+          set _ds to (description of _el) as text
+        end try
+        set _vv to ""
+        try
+          set _vv to (value of _el) as text
+        end try
+        set _roleOk to true
+        if _role is not "" then set _roleOk to my roleMatches(_r, _role)
+        if _roleOk then
+          ignoring case
+            if (_nm is _label) or (_ds is _label) or (_vv is _label) then
+              set end of _exact to _el
+            else if (_label is not "") and ((_nm contains _label) or (_ds contains _label)) then
+              set end of _loose to _el
+            end if
+          end ignoring
+        end if
+      end repeat
+      set _matches to _exact
+      if (count of _matches) is 0 then set _matches to _loose
+      set _n to (count of _matches)
+      if _n is 0 then return "NOTFOUND"
+      set _target to missing value
+      if _index > 0 then
+        if _index > _n then return "ERR" & tab & "index out of range"
+        set _target to item _index of _matches
+      else if _n is 1 then
+        set _target to item 1 of _matches
+      else
+        set _out to "AMBIGUOUS" & tab & _n
+        set _cap to _n
+        if _cap > 10 then set _cap to 10
+        repeat with _j from 1 to _cap
+          set _c to item _j of _matches
+          set _cr to ""
+          try
+            set _cr to (role of _c) as text
+          end try
+          set _cn to ""
+          try
+            set _cn to (name of _c) as text
+          end try
+          if _cn is "" then
+            try
+              set _cn to (description of _c) as text
+            end try
+          end if
+          set _out to _out & linefeed & (_j as text) & ") " & _cr & " " & _cn
+        end repeat
+        return _out
+      end if
+      if _action is "find" then return "FOUND"
+      if _action is "set" then
+        try
+          set value of _target to _value
+          return "OK"
+        on error errMsg
+          return "ERR" & tab & errMsg
+        end try
+      end if
+      try
+        perform action "AXPress" of _target
+        return "OK"
+      on error
+        try
+          click _target
+          return "OK"
+        on error errMsg2
+          return "ERR" & tab & errMsg2
+        end try
+      end try
+    end tell
+  end tell
+end findAndAct
+
+on roleMatches(_axRole, _want)
+  set a to my normRole(_axRole)
+  set b to my normRole(_want)
+  if b is "" then return true
+  ignoring case
+    if a contains b then return true
+    if b contains a then return true
+  end ignoring
+  return false
+end roleMatches
+
+on normRole(s)
+  set AppleScript's text item delimiters to " "
+  set _parts to text items of s
+  set AppleScript's text item delimiters to ""
+  set s to _parts as text
+  set AppleScript's text item delimiters to ""
+  ignoring case
+    if (count of s) > 2 and (text 1 thru 2 of s) is "ax" then set s to text 3 thru -1 of s
+  end ignoring
+  return s
+end normRole`;
+}
+
+/** Parse the structured token returned by uiActionScript into a UiActionResult. */
+function parseUiResult(stdout: string): UiActionResult {
+  const s = stdout.replace(/\r/g, "").trim();
+  if (s === "OK" || s === "FOUND") return { status: "ok" };
+  if (s === "NOTFOUND") return { status: "not-found", message: "no matching element found" };
+  if (s === "NOWINDOW") return { status: "error", message: "that app has no front window" };
+  if (s === "NOPROCESS") return { status: "error", message: "that app isn't running" };
+  const [head, ...rest] = s.split("\n");
+  if (head.startsWith("AMBIGUOUS")) {
+    const n = Number(head.split("\t")[1]) || rest.length;
+    return {
+      status: "ambiguous",
+      message: `${n} elements match — retry with a more specific label, or call again with "index" to pick one`,
+      candidates: rest,
+    };
+  }
+  if (head.startsWith("ERR")) return { status: "error", message: head.split("\t")[1] || "error" };
+  return { status: "error", message: s || "no result" };
+}
+
+/**
+ * Locate a UI element by role + label in the front window/sheet of an app and optionally act on
+ * it (click or set a value), retrying until it appears. This is the code-side traversal that lets
+ * the model say *what* to interact with (from uiTreeSummary) without constructing element paths.
+ */
+export async function uiAction(sandbox: MacOSSandbox, opts: UiActionOptions): Promise<UiActionResult> {
+  const res = await runAppleScript(sandbox, uiActionScript(opts));
+  if (!res.stdout.trim() && res.exitCode !== 0) {
+    return { status: "error", message: res.stderr.trim() || `osascript exited ${res.exitCode}` };
+  }
+  return parseUiResult(res.stdout);
+}
+
 /** URL of the gateway's compressed-screenshot endpoint with JPEG parameters. */
 export function screenshotUrl(baseUrl: string, sandboxId: string, opts: ScreenshotOptions = {}): string {
   const url = new URL(`${baseUrl.replace(/\/+$/, "")}/v1/sandboxes/${sandboxId}/screenshot/compressed`);

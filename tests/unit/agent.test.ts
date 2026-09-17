@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import { AGENT_SYSTEM_PROMPT, MAX_AGENT_STEPS } from "../../src/agent.js";
 
 describe("AGENT_SYSTEM_PROMPT", () => {
-  it("names both tools and tells the model how to drive apps", () => {
+  it("names the tools and steers toward the semantic ones", () => {
     expect(AGENT_SYSTEM_PROMPT).toMatch(/read_accessibility_tree/);
+    expect(AGENT_SYSTEM_PROMPT).toMatch(/click_element/);
+    expect(AGENT_SYSTEM_PROMPT).toMatch(/set_field_value/);
+    expect(AGENT_SYSTEM_PROMPT).toMatch(/wait_for_element/);
     expect(AGENT_SYSTEM_PROMPT).toMatch(/run_applescript/);
-    expect(AGENT_SYSTEM_PROMPT).toMatch(/System Events/);
     expect(AGENT_SYSTEM_PROMPT).toMatch(/activate/);
   });
 });
