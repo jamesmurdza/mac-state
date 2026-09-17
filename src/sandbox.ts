@@ -55,6 +55,147 @@ export async function runAppleScript(sandbox: MacOSSandbox, script: string): Pro
   return sandbox.execSsh(`osascript ${SCRIPT_PATH}`);
 }
 
+export interface SystemInfo {
+  product: string;
+  version: string;
+  build: string;
+  hostname: string;
+  arch: string;
+  model: string;
+  cpus: string;
+  memBytes: string;
+  uptime: string;
+}
+
+/** One line per field, `key=value`, so the reply is trivial to parse even over a single SSH round trip. */
+const SYSTEM_INFO_SCRIPT = [
+  'echo "product=$(sw_vers -productName)"',
+  'echo "version=$(sw_vers -productVersion)"',
+  'echo "build=$(sw_vers -buildVersion)"',
+  'echo "hostname=$(hostname)"',
+  'echo "arch=$(uname -m)"',
+  'echo "model=$(sysctl -n hw.model)"',
+  'echo "cpus=$(sysctl -n hw.ncpu)"',
+  'echo "memBytes=$(sysctl -n hw.memsize)"',
+  "echo \"uptime=$(uptime | sed 's/^ *//')\"",
+].join("\n");
+
+/** Standard system info (macOS version, model, CPU/memory, hostname, uptime) via `sw_vers`/`sysctl`/`uptime` over SSH. */
+export async function systemInfo(sandbox: MacOSSandbox): Promise<SystemInfo> {
+  const result = await sandbox.execSsh(SYSTEM_INFO_SCRIPT);
+  if (result.exitCode !== 0) throw new Error(`Reading system info failed: ${result.stderr || result.stdout}`);
+  const fields: Record<string, string> = {};
+  for (const line of result.stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const i = trimmed.indexOf("=");
+    if (i === -1) continue;
+    fields[trimmed.slice(0, i)] = trimmed.slice(i + 1);
+  }
+  return {
+    product: fields.product ?? "",
+    version: fields.version ?? "",
+    build: fields.build ?? "",
+    hostname: fields.hostname ?? "",
+    arch: fields.arch ?? "",
+    model: fields.model ?? "",
+    cpus: fields.cpus ?? "",
+    memBytes: fields.memBytes ?? "",
+    uptime: fields.uptime ?? "",
+  };
+}
+
+interface UiElementNode {
+  name?: string | null;
+  role?: string;
+  description?: string | null;
+  role_description?: string;
+  value?: unknown;
+  enabled?: boolean;
+  children?: UiElementNode[];
+}
+
+interface UiWindowNode {
+  name?: string | null;
+  owner: string;
+  role: string;
+  is_on_screen?: boolean;
+  children?: UiElementNode[];
+}
+
+interface UiTreeResponse {
+  applications?: Array<{ info: { name: string; active: boolean }; windows: unknown[] }>;
+  windows?: UiWindowNode[];
+}
+
+interface PrunedElement {
+  role: string;
+  label?: string;
+  enabled?: false;
+  children?: PrunedElement[];
+}
+
+/**
+ * Background OS chrome, not app windows a user would ask about. Observed empirically: Notification
+ * Center's own panels (widgets like "Tips"/weather, shown even when nothing is actually open) can
+ * dwarf the one window that matters in the char budget — e.g. one real Finder window vs. a widget
+ * tree of unrelated marketing copy. Dock/Control Center windows are similarly irrelevant chrome.
+ */
+const SYSTEM_CHROME_OWNERS = new Set(["Notification Center", "Control Center", "Dock", "Window Server"]);
+
+/** role/label/children only — drops ids, geometry, and structural wrappers with nothing in them. */
+function pruneElement(node: UiElementNode, depth: number, maxDepth: number): PrunedElement | null {
+  const label = node.name || node.description || (typeof node.value === "string" ? node.value : undefined) || undefined;
+  const children =
+    depth < maxDepth && Array.isArray(node.children)
+      ? node.children.map((c) => pruneElement(c, depth + 1, maxDepth)).filter((c): c is PrunedElement => c !== null)
+      : [];
+  if (!label && children.length === 0) return null;
+  const pruned: PrunedElement = { role: node.role_description || node.role || "element" };
+  if (label) pruned.label = label;
+  if (node.enabled === false) pruned.enabled = false;
+  if (children.length) pruned.children = children;
+  return pruned;
+}
+
+export interface UiSummaryOptions {
+  /** Hard cap on the returned JSON string's length. A full tree can run to hundreds of KB. */
+  maxChars?: number;
+  /** How many levels deep to walk each window's element tree. */
+  maxDepth?: number;
+}
+
+/**
+ * Compact JSON summary of what's on screen — running/frontmost apps, and per on-screen
+ * window a pruned accessibility tree (role + label only, no ids/geometry) — meant to be
+ * dropped into a generation prompt as context. `sandbox.uiTree()` itself is an untyped,
+ * unbounded dump of the native macOS accessibility tree (routinely tens of KB even for an
+ * idle desktop), so this always prunes and then hard-caps the result.
+ */
+export async function uiTreeSummary(sandbox: MacOSSandbox, opts: UiSummaryOptions = {}): Promise<string> {
+  const maxChars = opts.maxChars ?? 4000;
+  const maxDepth = opts.maxDepth ?? 6;
+  const raw = (await sandbox.uiTree()) as UiTreeResponse;
+
+  const apps = (raw.applications ?? [])
+    .filter((a) => a.info.active || a.windows.length > 0)
+    .map((a) => ({ name: a.info.name, active: a.info.active }));
+
+  const windows = (raw.windows ?? [])
+    .filter((w) => w.is_on_screen && w.role === "app" && !SYSTEM_CHROME_OWNERS.has(w.owner))
+    .map((w) => ({
+      app: w.owner,
+      title: w.name || undefined,
+      elements: (w.children ?? []).map((c) => pruneElement(c, 0, maxDepth)).filter((c): c is PrunedElement => c !== null),
+    }));
+
+  let json = JSON.stringify({ apps, windows });
+  if (json.length > maxChars) {
+    json = `${json.slice(0, maxChars)}…(truncated, ${json.length} chars total)`;
+  }
+  return json;
+}
+
 /** URL of the gateway's compressed-screenshot endpoint with JPEG parameters. */
 export function screenshotUrl(baseUrl: string, sandboxId: string, opts: ScreenshotOptions = {}): string {
   const url = new URL(`${baseUrl.replace(/\/+$/, "")}/v1/sandboxes/${sandboxId}/screenshot/compressed`);
