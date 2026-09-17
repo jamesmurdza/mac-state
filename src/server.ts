@@ -15,7 +15,7 @@ const history: ModelMessage[] = [];
 const app = createApp({
   session,
   runAgent: (prompt, model) => runAgent(prompt, model, session, history),
-  streamAgent: (prompt, model) => streamAgent(prompt, model, session, history),
+  streamAgent: (prompt, model, signal) => streamAgent(prompt, model, session, history, signal),
 });
 
 const server = serve({ fetch: app.fetch, port }, (info) => {

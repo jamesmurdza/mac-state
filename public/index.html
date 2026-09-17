@@ -199,6 +199,7 @@
     transition: opacity .1s;
   }
   #send.hidden { visibility: hidden; pointer-events: none; }
+  #send.stop { background: var(--red); }
   #send:hover { filter: brightness(1.08); }
   #send:disabled { opacity: .45; cursor: progress; }
   #send svg { width: 16px; height: 16px; }
@@ -251,6 +252,7 @@
 <script>
   const $ = (id) => document.getElementById(id);
   const messages = $("messages");
+  let currentAbort = null; // AbortController while a turn is streaming; null when idle
 
   function scrollToBottom() {
     messages.scrollTop = messages.scrollHeight;
@@ -393,11 +395,13 @@
   }
 
   // POST to an SSE endpoint and invoke onEvent for each `data:` frame as it arrives.
-  async function streamEvents(url, body, onEvent) {
+  // `signal` lets the caller abort the stream (Stop button).
+  async function streamEvents(url, body, onEvent, signal) {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
+      signal,
     });
     if (!res.ok || !res.body) {
       let data;
@@ -579,8 +583,9 @@
     addUserMessage(text);
     $("prompt").value = "";
     $("prompt").style.height = "auto";
-    $("send").classList.add("hidden");
-    $("send").disabled = true;
+    const controller = new AbortController();
+    currentAbort = controller;
+    setButtonRunning(true);
 
     const tools = new Map(); // toolCallId -> { details, tool, input }
     let thinking = addStatusMessage("Working…");
@@ -659,19 +664,48 @@
             break;
           }
         }
-      });
+      }, controller.signal);
       clearThinking();
       if (!gotContent) addAssistantMessage("Done.");
     } catch (err) {
       clearThinking();
-      addAssistantMessage(err.message, true);
+      // A user-initiated stop aborts the fetch; that's not an error to report.
+      if (err.name === "AbortError" || controller.signal.aborted) addSystemMessage("Stopped.");
+      else addAssistantMessage(err.message, true);
     } finally {
-      $("send").disabled = false;
+      currentAbort = null;
+      setButtonRunning(false);
       $("prompt").focus();
     }
   }
 
-  $("send").addEventListener("click", send);
+  // The send button doubles as a stop button while a turn is streaming.
+  const SEND_ICON =
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>';
+  const STOP_ICON = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+
+  function setButtonRunning(running) {
+    const b = $("send");
+    if (running) {
+      b.innerHTML = STOP_ICON;
+      b.title = "Stop";
+      b.setAttribute("aria-label", "Stop");
+      b.classList.add("stop");
+      b.classList.remove("hidden");
+    } else {
+      b.innerHTML = SEND_ICON;
+      b.title = "Send (Enter)";
+      b.setAttribute("aria-label", "Send");
+      b.classList.remove("stop");
+      b.classList.toggle("hidden", !$("prompt").value.trim());
+    }
+  }
+
+  function stopRun() {
+    if (currentAbort) currentAbort.abort();
+  }
+
+  $("send").addEventListener("click", () => (currentAbort ? stopRun() : send()));
   $("prompt").addEventListener("keydown", (e) => {
     if (e.key !== "Enter") return;
     e.preventDefault();
@@ -680,12 +714,12 @@
       ta.setRangeText("\n", ta.selectionStart, ta.selectionEnd, "end");
       return;
     }
-    if (!$("send").disabled) send();
+    if (!currentAbort) send(); // don't submit a new prompt while a turn is running
   });
   $("prompt").addEventListener("input", (e) => {
     e.target.style.height = "auto";
     e.target.style.height = Math.min(e.target.scrollHeight, 200) + "px";
-    $("send").classList.toggle("hidden", !e.target.value.trim());
+    if (!currentAbort) $("send").classList.toggle("hidden", !e.target.value.trim());
   });
 
   $("chip").addEventListener("click", openSysinfo);

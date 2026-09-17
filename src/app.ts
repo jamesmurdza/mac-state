@@ -9,7 +9,7 @@ import type { SandboxSession } from "./session.js";
 export interface AppDeps {
   session: SandboxSession;
   runAgent: (prompt: string, model: ModelChoice) => Promise<AgentResult>;
-  streamAgent: (prompt: string, model: ModelChoice) => AsyncIterable<AgentEvent>;
+  streamAgent: (prompt: string, model: ModelChoice, signal?: AbortSignal) => AsyncIterable<AgentEvent>;
 }
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -83,7 +83,10 @@ export function createApp({ session, runAgent, streamAgent }: AppDeps): Hono {
     if (!prompt) return c.json({ error: "prompt is required" }, 400);
     const model = modelField(body);
     return streamSSE(c, async (stream) => {
-      for await (const event of streamAgent(prompt, model)) {
+      // Stop button / client disconnect -> abort the model so it stops taking further steps.
+      const ac = new AbortController();
+      stream.onAbort(() => ac.abort());
+      for await (const event of streamAgent(prompt, model, ac.signal)) {
         await stream.writeSSE({ data: JSON.stringify(event) });
       }
     });

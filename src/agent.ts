@@ -194,19 +194,22 @@ export type AgentEvent =
  * text), so the UI can render the turn in real time. Errors surface as an "error" event rather
  * than throwing, since the HTTP response has already begun streaming by the time they occur.
  *
- * `history` is the running conversation. The new user turn and the model's response messages are
- * committed to it only on a clean finish, so a failed turn doesn't leave a dangling user message.
+ * `signal`, when aborted (the user hit Stop / the client disconnected), stops the model from
+ * taking further steps. `history` is the running conversation; the new user turn and the model's
+ * response messages are committed to it only on a clean finish, so an interrupted or failed turn
+ * doesn't leave a dangling user message or a tool call with no result.
  */
 export async function* streamAgent(
   prompt: string,
   modelChoice: ModelChoice,
   session: SandboxSession,
   history: ModelMessage[] = [],
+  signal?: AbortSignal,
 ): AsyncGenerator<AgentEvent> {
   const messages: ModelMessage[] = [...history, { role: "user", content: prompt }];
-  let errored = false;
+  let clean = true;
   try {
-    const result = streamText(agentRequest(messages, modelChoice, session));
+    const result = streamText({ ...agentRequest(messages, modelChoice, session), abortSignal: signal });
     for await (const part of result.fullStream) {
       switch (part.type) {
         case "tool-call":
@@ -221,18 +224,23 @@ export async function* streamAgent(
         case "text-delta":
           if (part.text) yield { t: "text", text: part.text };
           break;
+        case "abort":
+          clean = false;
+          break;
         case "error":
-          errored = true;
+          clean = false;
           yield { t: "error", error: String(part.error) };
           break;
       }
     }
-    if (!errored) {
+    if (clean) {
       const responseMessages = await result.responseMessages;
       history.splice(0, history.length, ...messages, ...responseMessages);
     }
   } catch (err) {
-    yield { t: "error", error: err instanceof Error ? err.message : String(err) };
+    // An aborted stream throws AbortError — expected when the user hits Stop, not a real error.
+    const aborted = signal?.aborted || (err instanceof Error && err.name === "AbortError");
+    if (!aborted) yield { t: "error", error: err instanceof Error ? err.message : String(err) };
   }
   yield { t: "done" };
 }
