@@ -148,6 +148,7 @@
   }
   .msg-status > summary:hover .chev { opacity: .7; }
   .msg-status[open] > summary .chev { transform: rotate(45deg); }
+  .msg-status.failed > summary { color: var(--red); }
   .tool-body {
     margin-top: 4px; background: var(--panel-2); border-radius: 8px; padding: 10px 12px;
   }
@@ -301,17 +302,6 @@
       </summary>
       <div class="group-body"></div>`;
     return details;
-  }
-
-  // "Read screen", "Ran script", "Read screen and ran scripts", etc., from the calls so far.
-  function groupSummary(children) {
-    const reads = children.filter((c) => c.tool === "read_accessibility_tree").length;
-    const runs = children.filter((c) => c.tool === "run_applescript").length;
-    const phrases = [];
-    if (reads) phrases.push("read screen");
-    if (runs) phrases.push(runs > 1 ? "ran scripts" : "ran script");
-    const s = phrases.join(" and ") || "worked";
-    return s.charAt(0).toUpperCase() + s.slice(1);
   }
 
   // Sets a disclosure's own summary text (the first .status-text is the element's own summary,
@@ -540,37 +530,40 @@
     return parts.join("");
   }
 
+  // The model's own present-tense description of a step ("Opening TextEdit…"), falling back to a
+  // generic label if it didn't provide one.
+  function stepLabel(tool, input) {
+    return (input && input.summary) || (tool === "run_applescript" ? "Running script…" : "Reading screen…");
+  }
+
   // Render one status line per tool call the agent made. Same disclosure component either way:
   // a run_applescript step reveals the script and its output; a read_accessibility_tree step
-  // reveals the returned JSON. Either can also carry a tool-execution error.
+  // reveals the returned JSON. Either can also carry a tool-execution error. The label stays the
+  // model's step summary; failure is shown by coloring it (and the error/exit code in the body).
   function fillStatusStep(details, step) {
     const body = details.querySelector(".tool-body");
+    setStatusText(details, stepLabel(step.tool, step.input));
     if (step.tool === "run_applescript") {
       const script = (step.input && step.input.script) || "";
-      if (step.error) {
-        setStatusText(details, "Script failed");
-        body.innerHTML = scriptHtml(script) + streamHtml("error", String(step.error));
-      } else {
-        const failed = step.output && step.output.exitCode !== 0;
-        setStatusText(details, failed ? "Script failed" : "Ran script");
-        body.innerHTML = scriptHtml(script) + execHtml(step.output);
-      }
+      const failed = !!step.error || (step.output && step.output.exitCode !== 0);
+      details.classList.toggle("failed", failed);
+      body.innerHTML = step.error
+        ? scriptHtml(script) + streamHtml("error", String(step.error))
+        : scriptHtml(script) + execHtml(step.output);
     } else {
-      const ok = !step.error;
-      setStatusText(details, ok ? "Read screen" : "Couldn't read screen");
-      body.innerHTML = ok ? jsonHtml(step.output) : `<pre>${escapeHtml(String(step.error))}</pre>`;
+      details.classList.toggle("failed", !!step.error);
+      body.innerHTML = step.error ? `<pre>${escapeHtml(String(step.error))}</pre>` : jsonHtml(step.output);
     }
   }
 
-  // A tool call that has started but not yet returned. The script is shown right away so you can
-  // watch it run; the read-screen body stays empty until its result arrives.
+  // A tool call that has started but not yet returned. The model's step summary is shown right
+  // away as the label; the script body shows immediately so you can watch it run.
   function renderToolPending(details, tool, input) {
     const body = details.querySelector(".tool-body");
+    setStatusText(details, stepLabel(tool, input));
     if (tool === "run_applescript") {
-      setStatusText(details, "Running script…");
       body.innerHTML = scriptHtml((input && input.script) || "");
     } else {
-      setStatusText(details, "Reading screen…");
       body.innerHTML = "";
     }
   }
@@ -616,11 +609,11 @@
         gb.appendChild(child);
         run.group = group;
         run.children.push(entry);
-        setStatusText(group, groupSummary(run.children));
+        setStatusText(group, stepLabel(entry.tool, entry.input));
       } else {
         run.group.querySelector(".group-body").appendChild(child);
         run.children.push(entry);
-        setStatusText(run.group, groupSummary(run.children));
+        setStatusText(run.group, stepLabel(entry.tool, entry.input));
       }
       scrollToBottom();
     }

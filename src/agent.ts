@@ -26,6 +26,11 @@ function makeTools(session: SandboxSession) {
       description:
         "Run an AppleScript block on the sandbox with osascript. Returns its stdout, stderr, and exit code.",
       inputSchema: z.object({
+        summary: z
+          .string()
+          .describe(
+            'A short present-tense description of what this step does, shown live to the user, e.g. "Opening TextEdit and typing the note".',
+          ),
         script: z.string().describe("Complete, runnable AppleScript source. No markdown fences."),
       }),
       execute: ({ script }) => session.use((s) => runAppleScript(s, script)),
@@ -33,7 +38,13 @@ function makeTools(session: SandboxSession) {
     read_accessibility_tree: tool({
       description:
         "Get a pruned JSON summary of what's currently on screen: running apps and, per on-screen window, its accessibility tree by role and label.",
-      inputSchema: z.object({}),
+      inputSchema: z.object({
+        summary: z
+          .string()
+          .describe(
+            'A short present-tense description of what you\'re checking, shown live to the user, e.g. "Checking what\'s on screen".',
+          ),
+      }),
       execute: () => session.use((s) => uiTreeSummary(s)),
     }),
   };
