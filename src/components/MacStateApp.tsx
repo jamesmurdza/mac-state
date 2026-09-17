@@ -24,36 +24,39 @@ export function MacStateApp() {
   const [sysinfoOpen, setSysinfoOpen] = useState(false);
   // Guards against React 19's dev-mode Strict Mode double-invoking this effect (mount -> cleanup
   // -> mount again, to surface non-idempotent effects). Creating a sandbox is a real, expensive,
-  // non-idempotent side effect (unlike e.g. a GET that's safe to fire twice), so unlike the
-  // `cancelled` flag below -- which only discards a *stale response* -- this ref stops the second
-  // invocation from ever making the request at all. It intentionally survives the simulated
-  // unmount/remount (a plain module-level `let` would not), and is never reset, since this
-  // component mounts exactly once for the life of the page.
+  // non-idempotent side effect (unlike e.g. a GET that's safe to fire twice), so this ref stops a
+  // second invocation from ever making the request at all -- it intentionally survives the
+  // simulated unmount/remount (a plain module-level `let` would not), and is never reset, since
+  // this component mounts exactly once for the life of the page.
+  //
+  // Deliberately NOT paired with a `cancelled`-on-cleanup flag (an earlier version of this effect
+  // had one): that pattern assumes a *second* invocation will start a fresh, uncancelled fetch to
+  // pick up the work once the first's cleanup fires -- true for an ordinary un-guarded effect, but
+  // false here. With the guard above, StrictMode's simulated cleanup still runs (nothing stops
+  // it), but no second invocation ever follows it to restart the work. A `cancelled` flag set by
+  // that cleanup would silently orphan the one real fetch's result forever, leaving `vncState`
+  // stuck on "connecting" -- which is exactly the regression this comment is here to prevent
+  // re-introducing. Since the ref already guarantees the fetch fires at most once for the whole
+  // page's lifetime, its result should always be applied when it resolves.
   const statusRequested = useRef(false);
 
   // The sandbox is created on this first request; then the gateway's noVNC viewer is embedded.
   useEffect(() => {
     if (statusRequested.current) return;
     statusRequested.current = true;
-    let cancelled = false;
+    setVncState("connecting");
     (async () => {
-      setVncState("connecting");
       try {
         const res = await fetch("/api/status");
         const data = await res.json();
         if (!res.ok) throw new Error(data.error);
-        if (cancelled) return;
         setSandbox(data);
         setVncState("connected");
       } catch (err) {
-        if (cancelled) return;
         setVncState("error");
         setConnectError(`Couldn't connect to a sandbox: ${err instanceof Error ? err.message : String(err)}`);
       }
     })();
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   // A tool call or a /api/sysinfo lookup can discover mid-session that the sandbox timed out and
