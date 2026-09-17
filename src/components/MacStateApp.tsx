@@ -74,6 +74,13 @@ export function MacStateApp() {
           onHistoryUpdate={setHistory}
           onSandboxUpdate={onSandboxUpdate}
           connectError={connectError}
+          // Not just cosmetic: while the initial /api/status call is still in flight, `sandbox` is
+          // null. If send() fired anyway it would post `sandbox: null`, and the route would create
+          // a SECOND sandbox independently of the one /api/status is already creating -- racing
+          // each other rather than one being derived from the other. Disabling the composer until
+          // that first call settles (success or error) closes the window entirely, rather than
+          // just cleaning up after it like the done.sandbox fix does for every turn after this one.
+          ready={vncState !== "connecting"}
         />
       </div>
       <SysInfoModal open={sysinfoOpen} onClose={() => setSysinfoOpen(false)} sandbox={sandbox} onSandboxUpdate={onSandboxUpdate} />

@@ -52,6 +52,7 @@ export function ChatPanel({
   onHistoryUpdate,
   onSandboxUpdate,
   connectError,
+  ready,
 }: {
   sandbox: SandboxDescriptor | null;
   history: ModelMessage[];
@@ -59,6 +60,10 @@ export function ChatPanel({
   onSandboxUpdate: (descriptor: SandboxDescriptor) => void;
   /** Set once if the initial /api/status call failed; shown as a one-off centered notice. */
   connectError?: string | null;
+  /** False until the initial /api/status call has settled (success or error). The composer is
+   *  disabled until then so send() can never race that call with its own `sandbox: null` request
+   *  -- see the comment on this prop's call site in MacStateApp.tsx. */
+  ready: boolean;
 }) {
   const [items, setItems] = useState<TranscriptItem[]>([]);
   const [model, setModel] = useState<ModelChoice>(DEFAULT_MODEL_CHOICE);
@@ -85,6 +90,7 @@ export function ChatPanel({
   }, [connectError]);
 
   async function send() {
+    if (!ready) return; // belt-and-braces: the composer is disabled while !ready, so this shouldn't fire
     const ta = textareaRef.current;
     const text = ta?.value.trim() ?? "";
     if (!text) return;
@@ -242,10 +248,11 @@ export function ChatPanel({
         <textarea
           id="prompt"
           ref={textareaRef}
-          placeholder="Write an instruction..."
+          placeholder={ready ? "Write an instruction..." : "Connecting to a sandbox…"}
           spellCheck={false}
           aria-label="Write an instruction..."
           rows={1}
+          disabled={!ready}
           onInput={(e) => {
             const ta = e.currentTarget;
             ta.style.height = "auto";
@@ -261,7 +268,7 @@ export function ChatPanel({
               ta.dispatchEvent(new Event("input", { bubbles: true }));
               return;
             }
-            if (!running) void send(); // don't submit a new prompt while a turn is running
+            if (!running && ready) void send(); // don't submit a new prompt while a turn is running, or before a sandbox is known
           }}
         />
         <select
