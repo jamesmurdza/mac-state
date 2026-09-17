@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
+import type { AgentResult } from "../../src/agent.js";
 import { createApp } from "../../src/app.js";
-import { generateAppleScript } from "../../src/llm.js";
 import { SandboxSession } from "../../src/session.js";
 
 // Real dependencies. The paths exercised here never reach them, so no sandbox is created
-// and Claude is never called.
-const app = createApp({ session: new SandboxSession(), generate: generateAppleScript });
+// and the agent is never run.
+const neverRun = async (): Promise<AgentResult> => {
+  throw new Error("runAgent should not be called in these validation tests");
+};
+// eslint-disable-next-line require-yield
+async function* neverStream(): AsyncGenerator<never> {
+  throw new Error("streamAgent should not be called in these validation tests");
+}
+const app = createApp({ session: new SandboxSession(), runAgent: neverRun, streamAgent: neverStream });
 
 const post = (body: string, headers: Record<string, string> = { "Content-Type": "application/json" }) =>
   app.request("/api/run", { method: "POST", headers, body });

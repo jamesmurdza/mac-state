@@ -55,6 +55,369 @@ export async function runAppleScript(sandbox: MacOSSandbox, script: string): Pro
   return sandbox.execSsh(`osascript ${SCRIPT_PATH}`);
 }
 
+export interface SystemInfo {
+  product: string;
+  version: string;
+  build: string;
+  hostname: string;
+  arch: string;
+  model: string;
+  cpus: string;
+  memBytes: string;
+  uptime: string;
+}
+
+/** One line per field, `key=value`, so the reply is trivial to parse even over a single SSH round trip. */
+const SYSTEM_INFO_SCRIPT = [
+  'echo "product=$(sw_vers -productName)"',
+  'echo "version=$(sw_vers -productVersion)"',
+  'echo "build=$(sw_vers -buildVersion)"',
+  'echo "hostname=$(hostname)"',
+  'echo "arch=$(uname -m)"',
+  'echo "model=$(sysctl -n hw.model)"',
+  'echo "cpus=$(sysctl -n hw.ncpu)"',
+  'echo "memBytes=$(sysctl -n hw.memsize)"',
+  "echo \"uptime=$(uptime | sed 's/^ *//')\"",
+].join("\n");
+
+/** Standard system info (macOS version, model, CPU/memory, hostname, uptime) via `sw_vers`/`sysctl`/`uptime` over SSH. */
+export async function systemInfo(sandbox: MacOSSandbox): Promise<SystemInfo> {
+  const result = await sandbox.execSsh(SYSTEM_INFO_SCRIPT);
+  if (result.exitCode !== 0) throw new Error(`Reading system info failed: ${result.stderr || result.stdout}`);
+  const fields: Record<string, string> = {};
+  for (const line of result.stdout.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const i = trimmed.indexOf("=");
+    if (i === -1) continue;
+    fields[trimmed.slice(0, i)] = trimmed.slice(i + 1);
+  }
+  return {
+    product: fields.product ?? "",
+    version: fields.version ?? "",
+    build: fields.build ?? "",
+    hostname: fields.hostname ?? "",
+    arch: fields.arch ?? "",
+    model: fields.model ?? "",
+    cpus: fields.cpus ?? "",
+    memBytes: fields.memBytes ?? "",
+    uptime: fields.uptime ?? "",
+  };
+}
+
+interface UiElementNode {
+  name?: string | null;
+  role?: string;
+  description?: string | null;
+  role_description?: string;
+  value?: unknown;
+  enabled?: boolean;
+  /** Absolute screen rectangle [x1, y1, x2, y2] in pixels, when the node is on screen. */
+  bbox?: number[];
+  visible_bbox?: number[];
+  children?: UiElementNode[];
+}
+
+interface UiWindowNode {
+  name?: string | null;
+  owner: string;
+  role: string;
+  is_on_screen?: boolean;
+  children?: UiElementNode[];
+}
+
+interface UiMenubarItem {
+  title?: string | null;
+  bounds?: { x: number; y: number; width: number; height: number };
+}
+
+interface UiTreeResponse {
+  applications?: Array<{ info: { name: string; active: boolean }; windows: unknown[] }>;
+  windows?: UiWindowNode[];
+  menubar_items?: UiMenubarItem[];
+}
+
+interface PrunedElement {
+  role: string;
+  label?: string;
+  enabled?: false;
+  children?: PrunedElement[];
+}
+
+/**
+ * Background OS chrome, not app windows a user would ask about. Observed empirically: Notification
+ * Center's own panels (widgets like "Tips"/weather, shown even when nothing is actually open) can
+ * dwarf the one window that matters in the char budget — e.g. one real Finder window vs. a widget
+ * tree of unrelated marketing copy. Dock/Control Center windows are similarly irrelevant chrome.
+ */
+const SYSTEM_CHROME_OWNERS = new Set(["Notification Center", "Control Center", "Dock", "Window Server"]);
+
+/** role/label/children only — drops ids, geometry, and structural wrappers with nothing in them. */
+function pruneElement(node: UiElementNode, depth: number, maxDepth: number): PrunedElement | null {
+  const label = node.name || node.description || (typeof node.value === "string" ? node.value : undefined) || undefined;
+  const children =
+    depth < maxDepth && Array.isArray(node.children)
+      ? node.children.map((c) => pruneElement(c, depth + 1, maxDepth)).filter((c): c is PrunedElement => c !== null)
+      : [];
+  if (!label && children.length === 0) return null;
+  const pruned: PrunedElement = { role: node.role_description || node.role || "element" };
+  if (label) pruned.label = label;
+  if (node.enabled === false) pruned.enabled = false;
+  if (children.length) pruned.children = children;
+  return pruned;
+}
+
+export interface UiSummaryOptions {
+  /** Hard cap on the returned JSON string's length. A full tree can run to hundreds of KB. */
+  maxChars?: number;
+  /** How many levels deep to walk each window's element tree. */
+  maxDepth?: number;
+}
+
+/**
+ * Turn a raw uiTree() dump into a compact JSON summary of what's on screen — running/frontmost
+ * apps, and per on-screen window (including dialogs, sheets and alerts, each with its role) a
+ * pruned accessibility tree. Only obvious OS chrome is dropped, so a blocking dialog is never
+ * hidden. If an app is frontmost but shows no window, that is called out explicitly, since that
+ * "active but nothing to act on" state (e.g. an app still launching) is otherwise invisible.
+ */
+function summarizeTree(raw: UiTreeResponse, opts: UiSummaryOptions = {}): string {
+  const maxChars = opts.maxChars ?? 7000;
+  const maxDepth = opts.maxDepth ?? 6;
+
+  const apps = (raw.applications ?? [])
+    .filter((a) => a.info.active || a.windows.length > 0)
+    .map((a) => ({ name: a.info.name, active: a.info.active }));
+
+  // The frontmost app's menu-bar menus (Apple, File, Edit, …) so the model knows what it can open.
+  const menus = (raw.menubar_items ?? []).map((m) => m.title).filter((t): t is string => !!t);
+
+  // Every on-screen window that isn't OS chrome — dialogs and sheets included, and blank/not-yet-
+  // rendered windows too (an empty window of the frontmost app is itself a useful signal).
+  const windows = (raw.windows ?? [])
+    .filter((w) => w.is_on_screen && !SYSTEM_CHROME_OWNERS.has(w.owner))
+    .map((w) => ({
+      app: w.owner,
+      role: w.role,
+      title: w.name || undefined,
+      elements: (w.children ?? []).map((c) => pruneElement(c, 0, maxDepth)).filter((c): c is PrunedElement => c !== null),
+    }));
+
+  const shownOwners = new Set(windows.map((w) => w.app));
+  const noWindow = (raw.applications ?? [])
+    .filter((a) => a.info.active && !shownOwners.has(a.info.name) && !SYSTEM_CHROME_OWNERS.has(a.info.name))
+    .map((a) => a.info.name);
+  const note = noWindow.length
+    ? `${noWindow.join(", ")} frontmost but showing no window (still launching, or a dialog may be blocking it).`
+    : undefined;
+
+  // note first so this key diagnostic survives the char cap even when windows is large.
+  let json = JSON.stringify({ note, apps, menus, windows });
+  if (json.length > maxChars) {
+    json = `${json.slice(0, maxChars)}…(truncated, ${json.length} chars total)`;
+  }
+  return json;
+}
+
+/**
+ * Compact JSON summary of what's on screen — meant to be read by the agent before it acts.
+ * `sandbox.uiTree()` itself is an untyped, unbounded dump of the native macOS accessibility tree
+ * (routinely tens of KB even for an idle desktop), so this always prunes and hard-caps the result.
+ */
+export async function uiTreeSummary(sandbox: MacOSSandbox, opts: UiSummaryOptions = {}): Promise<string> {
+  return summarizeTree((await sandbox.uiTree()) as UiTreeResponse, opts);
+}
+
+/** True once the named app owns an on-screen (non-chrome) window that has rendered some content. */
+function appHasWindow(raw: UiTreeResponse, app: string): boolean {
+  const appLc = app.toLowerCase();
+  return (raw.windows ?? []).some(
+    (w) =>
+      w.is_on_screen &&
+      !SYSTEM_CHROME_OWNERS.has(w.owner) &&
+      (w.owner ?? "").toLowerCase().includes(appLc) &&
+      Array.isArray(w.children) &&
+      w.children.length > 0,
+  );
+}
+
+/**
+ * Launch or focus an app and wait until it actually presents a rendered window, then return the
+ * on-screen summary (same shape as uiTreeSummary). This replaces the brittle "activate then guess
+ * a delay" pattern: if the app never shows a usable window within the timeout, the returned
+ * summary's `note` says it's frontmost with nothing on screen (and any blank window or blocking
+ * dialog appears in `windows`), so the caller can react instead of acting on nothing.
+ */
+export async function openApp(sandbox: MacOSSandbox, app: string, timeoutSeconds = 15): Promise<string> {
+  await runAppleScript(sandbox, `tell application "${escapeAppleScript(app)}" to activate`);
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  let raw = (await sandbox.uiTree()) as UiTreeResponse;
+  while (!appHasWindow(raw, app) && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 500));
+    raw = (await sandbox.uiTree()) as UiTreeResponse;
+  }
+  return summarizeTree(raw);
+}
+
+/** Escape a string for embedding inside an AppleScript double-quoted literal. */
+function escapeAppleScript(s: string): string {
+  return s
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t");
+}
+
+export interface UiClickOptions {
+  /** Restrict to windows owned by this app (the window's `app` in the tree). Optional. */
+  app?: string;
+  /** Element role from the tree (e.g. "button", "menu item"); matched loosely. Optional. */
+  role?: string;
+  /** The element's visible label — matched against its name, description, then value. */
+  label: string;
+  /** 1-based choice among candidates, used to resolve a prior "ambiguous" result. */
+  index?: number;
+  /** How long to keep re-reading the tree while the element is absent (polling every 0.5s). */
+  timeoutSeconds?: number;
+}
+
+export interface UiActionResult {
+  status: "ok" | "not-found" | "ambiguous" | "error";
+  message?: string;
+  /** For an ambiguous match: the matching elements, so the model can retry with `index`. */
+  candidates?: string[];
+  /** The on-screen summary right after the action, so the model can decide the next step without
+   * a separate read_accessibility_tree call. */
+  screen?: string;
+}
+
+interface FoundElement {
+  role: string;
+  label: string;
+  cx: number;
+  cy: number;
+}
+
+/** Attach the current on-screen summary to an action result; settle first if the action changed
+ * something, so animations/transitions have finished before we read. */
+async function withScreen(sandbox: MacOSSandbox, result: UiActionResult): Promise<UiActionResult> {
+  if (result.status === "ok") await sleep(600);
+  const screen = summarizeTree((await sandbox.uiTree()) as UiTreeResponse);
+  return { ...result, screen };
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Center of a node's on-screen rectangle (prefer the visible portion), or null if it has none. */
+function nodeCenter(node: UiElementNode): { cx: number; cy: number } | null {
+  const area = (b?: number[]) => (Array.isArray(b) && b.length === 4 ? Math.max(0, b[2] - b[0]) * Math.max(0, b[3] - b[1]) : 0);
+  const box = area(node.visible_bbox) > 1 ? node.visible_bbox : node.bbox;
+  if (!Array.isArray(box) || box.length !== 4) return null;
+  const [x1, y1, x2, y2] = box.map(Number);
+  if (![x1, y1, x2, y2].every(Number.isFinite)) return null;
+  return { cx: (x1 + x2) / 2, cy: (y1 + y2) / 2 };
+}
+
+function nodeLabel(node: UiElementNode): string | undefined {
+  return node.name || node.description || (typeof node.value === "string" ? node.value : undefined) || undefined;
+}
+
+/** Normalize a role for tolerant matching: lowercase, drop spaces and a leading "AX". */
+function normRole(s: string): string {
+  return s.toLowerCase().replace(/\s+/g, "").replace(/^ax/, "");
+}
+
+/** Every clickable, labeled element currently on screen, with the point to click. */
+function collectClickable(raw: UiTreeResponse, app?: string): FoundElement[] {
+  const out: FoundElement[] = [];
+  const appLc = app?.toLowerCase();
+  const walk = (node: UiElementNode) => {
+    const label = nodeLabel(node);
+    const center = nodeCenter(node);
+    if (label && center) {
+      out.push({ role: node.role_description || node.role || "element", label: String(label), ...center });
+    }
+    for (const child of node.children ?? []) walk(child);
+  };
+  for (const w of raw.windows ?? []) {
+    if (!w.is_on_screen || SYSTEM_CHROME_OWNERS.has(w.owner)) continue;
+    if (appLc && !(w.owner ?? "").toLowerCase().includes(appLc)) continue;
+    for (const child of w.children ?? []) walk(child);
+  }
+  // Menu-bar menus (File, Edit, Product, …) — click one to open it, then the tree shows its items.
+  for (const m of raw.menubar_items ?? []) {
+    const b = m.bounds;
+    if (m.title && b && Number.isFinite(b.x)) {
+      out.push({ role: "menu bar item", label: String(m.title), cx: b.x + b.width / 2, cy: b.y + b.height / 2 });
+    }
+  }
+  return out;
+}
+
+function matchElements(all: FoundElement[], role: string | undefined, label: string): FoundElement[] {
+  const wantRole = role ? normRole(role) : "";
+  const roleOk = (e: FoundElement) => {
+    if (!wantRole) return true;
+    const r = normRole(e.role);
+    return r.includes(wantRole) || wantRole.includes(r);
+  };
+  const labelLc = label.toLowerCase();
+  const exact = all.filter((e) => roleOk(e) && e.label.toLowerCase() === labelLc);
+  if (exact.length) return exact;
+  return all.filter((e) => roleOk(e) && e.label.toLowerCase().includes(labelLc));
+}
+
+/**
+ * Click an on-screen element located by role + label, using the same gateway UI tree the agent
+ * reads. It finds the element in that tree — which sees standard *and* SwiftUI apps, dialogs,
+ * sheets and menu-bar menus — and clicks its center via the mouse, so it can act on anything it
+ * can see (unlike System Events, which can't reach many SwiftUI controls). Re-reads the tree until
+ * the element appears or the timeout elapses, so it doubles as a wait.
+ */
+export async function clickElement(sandbox: MacOSSandbox, opts: UiClickOptions): Promise<UiActionResult> {
+  const deadline = Date.now() + (opts.timeoutSeconds ?? 5) * 1000;
+  let matches: FoundElement[] = [];
+  for (;;) {
+    const raw = (await sandbox.uiTree()) as UiTreeResponse;
+    matches = matchElements(collectClickable(raw, opts.app), opts.role, opts.label);
+    if (matches.length > 0 || Date.now() >= deadline) break;
+    await sleep(500);
+  }
+  if (matches.length === 0) {
+    return withScreen(sandbox, { status: "not-found", message: `no on-screen element matching label "${opts.label}"${opts.role ? ` (role "${opts.role}")` : ""}` });
+  }
+  let target: FoundElement;
+  if (opts.index && opts.index > 0) {
+    if (opts.index > matches.length) return withScreen(sandbox, { status: "error", message: `index ${opts.index} out of range (${matches.length} matches)` });
+    target = matches[opts.index - 1];
+  } else if (matches.length === 1) {
+    target = matches[0];
+  } else {
+    return withScreen(sandbox, {
+      status: "ambiguous",
+      message: `${matches.length} elements match — retry with a more specific label/role, or call again with "index" to pick one`,
+      candidates: matches.slice(0, 10).map((m, i) => `${i + 1}) ${m.role} "${m.label}"`),
+    });
+  }
+  await sandbox.mouse.click(Math.round(target.cx), Math.round(target.cy));
+  return withScreen(sandbox, { status: "ok" });
+}
+
+/** Type text into whatever control currently has keyboard focus (click it first). */
+export async function typeText(sandbox: MacOSSandbox, text: string): Promise<UiActionResult> {
+  await sandbox.keyboard.type(text);
+  return withScreen(sandbox, { status: "ok" });
+}
+
+/** Press a key or shortcut, e.g. "return", "escape", "tab", "cmd+shift+n", "cmd+r". */
+export async function pressKeys(sandbox: MacOSSandbox, keys: string): Promise<UiActionResult> {
+  const combo = keys.trim();
+  if (combo.includes("+")) await sandbox.keyboard.hotkey(combo);
+  else await sandbox.keyboard.press(combo);
+  return withScreen(sandbox, { status: "ok" });
+}
+
 /** URL of the gateway's compressed-screenshot endpoint with JPEG parameters. */
 export function screenshotUrl(baseUrl: string, sandboxId: string, opts: ScreenshotOptions = {}): string {
   const url = new URL(`${baseUrl.replace(/\/+$/, "")}/v1/sandboxes/${sandboxId}/screenshot/compressed`);
