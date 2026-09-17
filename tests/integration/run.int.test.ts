@@ -1,20 +1,35 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { runAgent, streamAgent } from "../../src/agent.js";
-import { createApp } from "../../src/app.js";
-import { SandboxSession } from "../../src/session.js";
+import { POST as runRoute } from "../../src/app/api/run/route.js";
+import { GET as statusRoute } from "../../src/app/api/status/route.js";
+import { attachSandbox, type SandboxDescriptor } from "../../src/lib/sandbox-handle.js";
 
-const session = new SandboxSession();
-const app = createApp({
-  session,
-  runAgent: (prompt, model) => runAgent(prompt, model, session),
-  streamAgent: (prompt, model) => streamAgent(prompt, model, session),
+// This app now holds no server-side session: the caller (here, the test) is responsible for
+// remembering the sandbox descriptor a response returns and resending it on the next call, the
+// same way the real client does. `current` starts undefined (first call creates a fresh sandbox)
+// and is updated from every response's `sandbox` field, so the whole file reuses one sandbox --
+// mirroring the old SandboxSession-backed test's behavior without any server-held state.
+let current: SandboxDescriptor | undefined;
+
+async function post(body: Record<string, unknown>): Promise<Response> {
+  const res = await runRoute(
+    new Request("http://localhost/api/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, sandbox: current }),
+    }),
+  );
+  if (res.ok) {
+    const data = await res.clone().json();
+    if (data.sandbox) current = data.sandbox;
+  }
+  return res;
+}
+
+afterAll(async () => {
+  if (current) await attachSandbox(current).close().catch(() => {});
 });
-const post = (body: unknown) =>
-  app.request("/api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 
 describe("POST /api/run with a ready-made script (no agent) on a real sandbox", () => {
-  afterAll(() => session.close());
-
   it("runs the script as-is and returns one step with both streams and the exit code", async () => {
     const script = 'log "to stderr"\ntell application "TextEdit" to activate\nreturn "to stdout"';
     const res = await post({ script });
@@ -31,8 +46,8 @@ describe("POST /api/run with a ready-made script (no agent) on a real sandbox", 
     expect(step.output.stderr.trim()).toBe("to stderr");
     expect(data.reply.trim()).toBe("to stdout");
 
-    const state = await session.use((s) =>
-      s.execSsh(`osascript -e 'tell application "System Events" to tell process "TextEdit" to get visible'`),
+    const state = await attachSandbox(current!).execSsh(
+      `osascript -e 'tell application "System Events" to tell process "TextEdit" to get visible'`,
     );
     expect(state.stdout.trim()).toBe("true");
   });
@@ -48,7 +63,7 @@ describe("POST /api/run with a ready-made script (no agent) on a real sandbox", 
 });
 
 describe("POST /api/run with the real agent and a real sandbox", () => {
-  it("turns a prompt into tool calls that run AppleScript, and TextEdit shows the text", async () => {
+  it("turns a prompt into tool calls that drive the GUI, and TextEdit shows the text", async () => {
     const started = performance.now();
     const res = await post({ prompt: "Open TextEdit and put the text 'hello from mac-state' in a new document" });
     console.log(`/api/run took ${((performance.now() - started) / 1000).toFixed(1)}s`);
@@ -58,17 +73,20 @@ describe("POST /api/run with the real agent and a real sandbox", () => {
     const data = await res.json();
     console.log(`served by ${data.model}\nsteps: ${data.steps.length}\nreply: ${data.reply}`);
     expect(data.model).toMatch(/^claude-/);
-    const scriptSteps = data.steps.filter((s: { tool: string }) => s.tool === "run_applescript");
-    expect(scriptSteps.length).toBeGreaterThanOrEqual(1);
-    expect(scriptSteps.some((s: { input: { script: string } }) => s.input.script.includes("TextEdit"))).toBe(true);
+    expect(Array.isArray(data.history)).toBe(true);
+    expect(data.history.length).toBeGreaterThan(0);
 
-    const text = await session.use((s) => s.execSsh(`osascript -e 'tell application "TextEdit" to get text of front document'`));
+    const text = await attachSandbox(current!).execSsh(`osascript -e 'tell application "TextEdit" to get text of front document'`);
     expect(text.stdout).toContain("hello from mac-state");
 
-    const status = await app.request("/api/status");
+    const status = await statusRoute(
+      new Request(
+        `http://localhost/api/status?${new URLSearchParams({ sandboxId: current!.sandboxId, host: current!.host, vncUrl: current!.vncUrl })}`,
+      ),
+    );
     expect(status.status).toBe(200);
     const info = await status.json();
-    expect(info.sandboxId).toMatch(/^sb-/);
+    expect(info.sandboxId).toBe(current!.sandboxId); // attach, not a fresh create
     expect(info.vncUrl).toMatch(/\/vnc\?sandbox=sb-/);
   });
 });

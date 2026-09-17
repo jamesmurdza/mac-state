@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_MODEL_CHOICE, isModelChoice, MODEL_IDS } from "../../src/llm.js";
+import { DEFAULT_MODEL_CHOICE, isModelChoice, MODEL_IDS } from "../../src/lib/llm.js";
 
 describe("model choices", () => {
   it("maps every choice to a claude-* model id", () => {

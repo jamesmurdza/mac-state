@@ -3,11 +3,13 @@
   "version": "0.1.0",
   "main": "index.js",
   "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
     "test": "vitest run",
     "test:unit": "vitest run tests/unit",
     "test:e2e": "vitest run tests/e2e",
     "typecheck": "tsc --noEmit",
-    "start": "tsx src/server.ts",
     "test:int": "vitest run tests/integration",
     "test:e2e:web": "playwright test"
   },
@@ -19,15 +21,18 @@
   "private": "true",
   "dependencies": {
     "@ai-sdk/anthropic": "^4.0.56",
-    "@hono/node-server": "^2.1.1",
     "ai": "^7.0.105",
-    "hono": "^4.13.7",
+    "next": "^16.3.5",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
     "use-computer-sdk": "^0.1.13",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
     "@types/node": "^22.20.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "tsx": "^4.23.13",
     "typescript": "^5.9.3",
     "vitest": "^3.2.7"

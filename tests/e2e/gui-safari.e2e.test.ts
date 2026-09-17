@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runAppleScript } from "../../src/sandbox.js";
+import { runAppleScript } from "../../src/lib/sandbox.js";
 import { pollUntil, processState, snap, useSandbox } from "./helpers.js";
 
 const SCENARIO = "gui-safari";

@@ -1,0 +1,195 @@
+  :root {
+    --bg: #f6f3ee; --panel: #ffffff; --panel-2: #efeae1;
+    --line: #e4ddd0; --line-2: #d9cfbd;
+    --ink: #211b12; --ink-2: #6e6455; --ink-3: #a89c88;
+    --accent: #0072d6; --accent-ink: #ffffff;
+    --red: #b8402c; --green: #2f8f52; --blue: #2f6fb0;
+    --bubble-user: #eee5d6; --bubble-assistant: #ffffff;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --shadow: 0 1px 2px rgba(30, 24, 12, .06);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #100f0d; --panel: #1a1815; --panel-2: #221f1a;
+      --line: #2c2823; --line-2: #3a342c;
+      --ink: #ece6da; --ink-2: #a89f91; --ink-3: #6f675c;
+      --accent: #4fa8ff; --accent-ink: #06213b;
+      --red: #f0796a; --green: #7fd68a; --blue: #8ec5ff;
+      --bubble-user: #262219; --bubble-assistant: #1a1815;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .5);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; color: var(--ink); font: 14.5px/1.55 var(--mono); background: var(--bg);
+  }
+  .app { display: grid; grid-template-columns: minmax(280px, var(--split-col, 58%)) 2px minmax(320px, 1fr); height: 100vh; }
+  @media (max-width: 860px) {
+    .app { grid-template-columns: 1fr; grid-template-rows: minmax(160px, var(--split-row, 42vh)) 2px minmax(160px, 1fr); height: 100vh; }
+  }
+
+  /* ---------- divider: a plain gray strip, no border trick ---------- */
+  .divider { background: var(--line-2); z-index: 5; touch-action: none; cursor: col-resize; }
+  .divider:hover, .divider.dragging { background: var(--accent); }
+  @media (max-width: 860px) {
+    .divider { cursor: row-resize; }
+  }
+
+  /* ---------- left: VNC stage ---------- */
+  .stage { position: relative; background: #000; display: flex; min-width: 0; min-height: 0; }
+  .stage iframe { flex: 1; width: 100%; height: 100%; border: 0; background: #000; }
+  .vnc-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: #000; }
+  .vnc-loading.hidden { display: none; }
+  .vnc-disconnected {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, .6); color: #ece6da; font-family: var(--sans); font-size: 13px; letter-spacing: .02em;
+  }
+  .vnc-disconnected.hidden { display: none; }
+  .spinner {
+    width: 30px; height: 30px; border-radius: 50%;
+    border: 3px solid rgba(255, 255, 255, .15); border-top-color: var(--accent);
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .chip {
+    position: absolute; top: 12px; left: 12px; display: flex; align-items: center; gap: 8px;
+    background: rgba(20, 18, 14, .72); backdrop-filter: blur(6px); color: #ece6da;
+    border: 1px solid rgba(255, 255, 255, .1); border-radius: 20px; padding: 6px 12px 6px 10px;
+    font-size: 11px; letter-spacing: .01em; cursor: pointer;
+  }
+  .chip:hover { background: rgba(20, 18, 14, .88); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-3); flex: none; }
+  .dot.busy { background: var(--accent); animation: pulse .9s infinite alternate; }
+  .dot.on { background: var(--green); }
+  .dot.err { background: var(--red); }
+  @keyframes pulse { from { opacity: .35 } to { opacity: 1 } }
+  /* full-page modal for system info */
+  .modal-overlay {
+    position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center;
+    background: rgba(10, 9, 8, .55); backdrop-filter: blur(2px);
+  }
+  .modal-overlay.hidden { display: none; }
+  .modal {
+    position: relative; width: min(420px, calc(100% - 40px)); max-height: calc(100% - 40px); overflow: auto;
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line); border-radius: 16px;
+    padding: 24px 22px; font-family: var(--sans); box-shadow: 0 30px 60px -20px rgba(0, 0, 0, .4);
+  }
+  .modal h2 { margin: 0 0 16px; font-size: 15px; }
+  .modal-close {
+    position: absolute; top: 10px; right: 10px; width: 30px; height: 30px; display: grid; place-items: center;
+    border: 0; border-radius: 50%; background: transparent; color: var(--ink-3); font-size: 18px; line-height: 1;
+    cursor: pointer;
+  }
+  .modal-close:hover { background: var(--panel-2); color: var(--ink); }
+  .modal dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 10px 16px; font-size: 13px; }
+  .modal dt { color: var(--ink-3); }
+  .modal dd { margin: 0; text-align: right; }
+  .modal .note { color: var(--ink-3); font-size: 13px; }
+  .vnc-tab {
+    position: absolute; top: 12px; right: 12px; display: grid; place-items: center; width: 30px; height: 30px;
+    background: rgba(20, 18, 14, .72); backdrop-filter: blur(6px); color: #ece6da;
+    border: 1px solid rgba(255, 255, 255, .1); border-radius: 50%; text-decoration: none;
+  }
+  .vnc-tab:hover { background: rgba(20, 18, 14, .9); }
+  .vnc-tab svg { width: 15px; height: 15px; }
+
+  /* ---------- right: chat ---------- */
+  .chat { display: flex; flex-direction: column; align-items: center; min-width: 0; min-height: 0; background: var(--bg); font-family: var(--sans); }
+  .messages {
+    flex: 1; width: 100%; overflow-y: auto; padding: 18px max(16px, (100% - 760px) / 2);
+    display: flex; flex-direction: column; gap: 14px;
+  }
+  .msg { max-width: 92%; }
+  .msg-system { align-self: center; max-width: 100%; color: var(--ink-3); font-size: 11px; text-align: center; padding: 2px 0; }
+  .msg-system.err { color: var(--red); }
+  .msg-user { align-self: flex-end; }
+  .msg-assistant { align-self: flex-start; }
+  .bubble {
+    padding: 10px 13px; border-radius: 14px; white-space: pre-wrap; word-break: break-word; box-shadow: var(--shadow);
+  }
+  .msg-user .bubble { background: var(--bubble-user); border-bottom-right-radius: 4px; }
+  .msg-assistant .bubble { background: none; box-shadow: none; padding: 2px 2px; white-space: normal; }
+  .msg-assistant .bubble.err { color: var(--red); }
+  /* rendered markdown in the assistant reply */
+  .msg-assistant .bubble p { margin: 0 0 8px; }
+  .msg-assistant .bubble p:last-child { margin-bottom: 0; }
+  .msg-assistant .bubble ul, .msg-assistant .bubble ol { margin: 4px 0; padding-left: 20px; }
+  .msg-assistant .bubble li { margin: 2px 0; }
+  .msg-assistant .bubble strong { font-weight: 600; }
+  .msg-assistant .bubble code {
+    font-family: var(--mono); font-size: .92em; background: var(--panel-2); padding: 1px 5px; border-radius: 5px;
+  }
+
+  /* run status: plain text, no badge — click to reveal the script below it. Looks the same
+     whether the run succeeded or failed; only the wording changes. */
+  .msg-status { align-self: flex-start; width: 100%; max-width: 100%; }
+  .msg-status > summary {
+    display: flex; align-items: center; gap: 6px; list-style: none; cursor: pointer; user-select: none;
+    color: var(--ink-3); padding: 2px 0;
+  }
+  .msg-status > summary::-webkit-details-marker { display: none; }
+  .msg-status > summary .chev {
+    width: 7px; height: 7px; flex: none; opacity: 0; transition: opacity .1s, transform .15s;
+    border-right: 1.4px solid currentColor; border-bottom: 1.4px solid currentColor; transform: rotate(-45deg);
+  }
+  .msg-status > summary:hover .chev { opacity: .7; }
+  .msg-status[open] > summary .chev { transform: rotate(45deg); }
+  .msg-status.failed > summary { color: var(--red); }
+  .tool-body {
+    margin-top: 4px; background: var(--panel-2); border-radius: 8px; overflow: hidden;
+  }
+  .tool-body pre { margin: 0; white-space: pre; overflow: auto; max-height: 320px; tab-size: 4; font-size: 12px; font-family: var(--mono); }
+  .tool-body > pre { padding: 10px 12px; }
+  /* the output half (stdout/stderr/exit): distinct background, no labels, uniform font */
+  .tool-body .output {
+    padding: 10px 12px; background: color-mix(in srgb, var(--panel-2) 72%, var(--panel));
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .tool-body .output pre, .tool-body .output .exit { color: var(--ink-2); font-size: 12px; font-family: var(--mono); }
+  /* a group of consecutive tool calls: nested, each independently collapsible */
+  .msg-group > .group-body {
+    margin-top: 4px; margin-left: 3px; padding-left: 11px; border-left: 2px solid var(--line-2);
+    display: flex; flex-direction: column; gap: 4px;
+  }
+  .msg-group > .group-body > .msg-status { width: 100%; max-width: 100%; }
+
+  /* AppleScript highlighting */
+  .hljs-keyword { color: var(--accent); }
+  .hljs-string { color: var(--green); }
+  .hljs-comment { color: var(--ink-3); font-style: italic; }
+  .hljs-number, .hljs-literal { color: var(--accent); }
+  .hljs-built_in, .hljs-type, .hljs-title, .hljs-attr { color: var(--blue); }
+
+  /* composer: one field — textarea, model menu and send button share the same box */
+  .composer {
+    display: flex; align-items: flex-end; gap: 4px; width: min(760px, calc(100% - 28px)); margin: 0 0 14px;
+    padding: 6px 6px 6px 14px; background: var(--panel); border: 1px solid var(--line-2); border-radius: 16px;
+  }
+  .composer:focus-within { border-color: var(--accent); }
+  .composer textarea {
+    flex: 1; resize: none; min-height: 24px; max-height: 200px; background: transparent; color: var(--ink);
+    border: 0; padding: 9px 4px; font: inherit; line-height: 1.45;
+  }
+  .composer textarea:focus { outline: none; }
+  .composer textarea::placeholder { color: var(--ink-3); }
+  .model-select {
+    height: 32px; flex: none; align-self: flex-end; margin-bottom: 3px; background: transparent; color: var(--ink-3);
+    border: 0; padding: 0 4px; font: inherit; font-size: 11.5px; cursor: pointer;
+    appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  }
+  .model-select:focus { outline: none; color: var(--ink); }
+  #send {
+    width: 32px; height: 32px; padding: 0; flex: none; margin-bottom: 3px; display: grid; place-items: center;
+    border: 0; border-radius: 9px; background: var(--accent); color: var(--accent-ink); cursor: pointer;
+    transition: opacity .1s;
+  }
+  #send.hidden { visibility: hidden; pointer-events: none; }
+  #send.stop { background: var(--red); }
+  #send:hover { filter: brightness(1.08); }
+  #send:disabled { opacity: .45; cursor: progress; }
+  #send svg { width: 16px; height: 16px; }
+
+  .messages::-webkit-scrollbar { width: 9px; }
+  .messages::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: 6px; }

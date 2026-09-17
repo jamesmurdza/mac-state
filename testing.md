@@ -1,8 +1,8 @@
 # Testing Guide
 
 ## Environment Setup
-- Package manager: npm (Node 22, ESM project)
-- Required env vars (put them in `.env`, loaded by `tests/setup.ts` and `src/server.ts` via Node's `process.loadEnvFile`):
+- Package manager: npm (Node 22, ESM project, Next.js App Router)
+- Required env vars (put them in `.env` — Next.js loads it automatically for `npm run dev`/`build`/`start`; `tests/setup.ts` loads it the same way via Node's `process.loadEnvFile` for the test runner):
   - `USE_COMPUTER_API_KEY` — use.computer account key (`uc_live_...`)
   - `USE_COMPUTER_RESERVATION_ID` — an active Mac mini reservation; the code never reserves
   - `ANTHROPIC_API_KEY` — Claude, for the integration and Playwright tests and the app itself
@@ -15,20 +15,31 @@
 
 ### Unit Tests
 Command: `npm run test:unit`
-Location: `tests/unit/` — pure functions and route validation through `app.request()`, no network.
+Location: `tests/unit/` — pure functions in `tests/unit/*.test.ts`, plus route-handler tests in
+`tests/unit/routes/*.test.ts` that import each `GET`/`POST` directly from `src/app/api/*/route.ts`
+and call it with a constructed `Request` (no server, no network — `resolveSandbox`/`runAgent`/etc.
+are mocked via `vi.mock`).
 
 ### Integration Tests (real sandbox + real Claude)
 Command: `npm run test:int`
 Location: `tests/integration/`
-- `session.int.test.ts` — `SandboxSession` reuses one sandbox and recreates it after an out-of-band delete.
-- `run.int.test.ts` — `POST /api/run` through `app.request()`: Claude writes the script, the sandbox runs it, TextEdit shows the text, `/api/status` reports the sandbox and VNC URL. About 20 s.
+- `sandbox-handle.int.test.ts` — the load-bearing test for the whole stateless design: proves
+  `attachSandbox()` reconnects to an existing sandbox using nothing but its id (no host/vncUrl
+  needed), and that `withSandbox()` recreates a sandbox and fires `onRotate` after an out-of-band
+  delete.
+- `run.int.test.ts` — calls `POST /api/run`'s route handler directly: Claude writes the script (or
+  a ready-made script is run as-is), the sandbox runs it, TextEdit shows the text, `GET /api/status`
+  reports the sandbox and VNC URL. The test threads the `sandbox` descriptor each response returns
+  into the next request's body itself, since the server holds none of it between calls. About 20 s.
 
 ### E2E Tests (Playwright, the web page)
-Command: `npm run test:e2e:web` (first time on a new OS: `npx playwright test --update-snapshots`)
+Command: `npm run test:e2e:web` (needs a real sandbox + `ANTHROPIC_API_KEY` for the full agent-turn test)
 Setup: `npx playwright install chromium`
-Base URL: `http://localhost:3000` — `playwright.config.ts` starts `npx tsx src/server.ts` itself.
-Location: `tests/e2e/web.spec.ts`; visual baseline in `tests/e2e/web.spec.ts-snapshots/` (live regions masked).
-The spec reaches into the cross-origin noVNC iframe with `frameLocator("#vnc")` and waits for its `#status` to read "Connected".
+Base URL: `http://localhost:3000` — `playwright.config.ts` starts the app itself: `next dev` locally,
+`next build && next start` in CI (`CI=true`) for parity with what's actually deployed.
+Location: `tests/e2e/web.spec.ts` — targets the React app's real DOM ids (`#chip`, `#vnc`, `#messages`,
+`#prompt`, `#send`, `#sysinfo-overlay`, …). No visual-regression snapshots (would need a first real
+run against a live sandbox to record a baseline).
 
 ### Sandbox Scenarios (real sandbox, vitest)
 Command: `npm run test:e2e`

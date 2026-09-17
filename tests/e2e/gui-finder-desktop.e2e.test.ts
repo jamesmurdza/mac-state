@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { runAppleScript } from "../../src/sandbox.js";
+import { runAppleScript } from "../../src/lib/sandbox.js";
 import { processState, snap, useSandbox, windowNames } from "./helpers.js";
 
 const SCENARIO = "gui-finder-desktop";

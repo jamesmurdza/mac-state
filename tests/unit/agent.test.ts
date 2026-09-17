@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_SYSTEM_PROMPT, MAX_AGENT_STEPS } from "../../src/agent.js";
+import { AGENT_SYSTEM_PROMPT, MAX_AGENT_STEPS } from "../../src/lib/agent.js";
 
 describe("AGENT_SYSTEM_PROMPT", () => {
   it("names the tools and steers toward the GUI ones", () => {

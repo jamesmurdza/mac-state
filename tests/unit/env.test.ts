@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { requireEnv } from "../../src/env.js";
+import { requireEnv } from "../../src/lib/env.js";
 
 const NAME = "MAC_STATE_TEST_VAR";
 

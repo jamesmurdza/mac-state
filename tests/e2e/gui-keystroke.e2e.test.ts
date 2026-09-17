@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { runAppleScript } from "../../src/sandbox.js";
+import { runAppleScript } from "../../src/lib/sandbox.js";
 import { processState, sleep, snap, useSandbox } from "./helpers.js";
 
 const SCENARIO = "gui-keystroke";
