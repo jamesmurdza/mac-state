@@ -48,7 +48,7 @@ describe("POST /api/stream", () => {
         { t: "sandbox", sandboxId: "sb-2", host: "mm002", vncUrl: "https://gw/vnc?sandbox=sb-2" },
         { t: "tool-result", id: "1", output: { status: "ok" } },
         { t: "text", text: "Done." },
-        { t: "done", history },
+        { t: "done", history, sandbox: { sandboxId: "sb-2", host: "mm002", vncUrl: "https://gw/vnc?sandbox=sb-2" } },
       ]),
     );
 
@@ -60,7 +60,7 @@ describe("POST /api/stream", () => {
 
     const frames = await readFrames(res);
     expect(frames.map((f) => f.t)).toEqual(["tool-call", "sandbox", "tool-result", "text", "done"]);
-    expect(frames[4]).toEqual({ t: "done", history });
+    expect(frames[4]).toEqual({ t: "done", history, sandbox: { sandboxId: "sb-2", host: "mm002", vncUrl: "https://gw/vnc?sandbox=sb-2" } });
   });
 
   it("returns 500 when the sandbox can't be resolved before the stream opens", async () => {

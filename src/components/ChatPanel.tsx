@@ -163,6 +163,10 @@ export function ChatPanel({
             }
             case "done":
               onHistoryUpdate(ev.history);
+              // Always current, not just on a mid-turn rotation -- this is what lets a turn that
+              // never called a tool (e.g. a plain "hi") still tell the client which sandbox got
+              // used, so the next turn reuses it instead of silently creating yet another one.
+              onSandboxUpdate({ sandboxId: ev.sandbox.sandboxId, host: ev.sandbox.host, vncUrl: ev.sandbox.vncUrl });
               break;
           }
         },

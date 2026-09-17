@@ -200,8 +200,13 @@ export type AgentEvent =
   | { t: "sandbox"; sandboxId: string; host: string; vncUrl: string }
   | { t: "error"; error: string }
   /** `history` is the full updated conversation on a clean finish, or the caller's original
-   *  `input.history` unchanged if the turn was aborted/errored before finishing cleanly. */
-  | { t: "done"; history: ModelMessage[] };
+   *  `input.history` unchanged if the turn was aborted/errored before finishing cleanly. `sandbox`
+   *  is *always* the sandbox this turn actually used -- not just on a mid-turn rotation. This is
+   *  what lets the client learn about a sandbox the route created from scratch (no descriptor was
+   *  sent, or the sandbox needed replacing) even when the turn made no tool calls at all: without
+   *  it, a turn with pure text output (e.g. "hi") would silently strand the client on a stale/null
+   *  descriptor, so *every* later turn re-creates yet another sandbox instead of reusing this one. */
+  | { t: "done"; history: ModelMessage[]; sandbox: SandboxDescriptor };
 
 /**
  * Run the agent and yield events as they happen (tool calls, tool results, streamed reply
@@ -265,5 +270,5 @@ export async function* streamAgent(input: AgentTurnInput): AsyncGenerator<AgentE
     if (!aborted) yield { t: "error", error: err instanceof Error ? err.message : String(err) };
   }
   yield* drainRotations();
-  yield { t: "done", history: finalHistory };
+  yield { t: "done", history: finalHistory, sandbox: toDescriptor(sandboxRef.current) };
 }
