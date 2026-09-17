@@ -158,7 +158,7 @@
   .hljs-string { color: var(--green); }
   .hljs-comment { color: var(--ink-3); font-style: italic; }
   .hljs-number, .hljs-literal { color: var(--accent); }
-  .hljs-built_in, .hljs-type, .hljs-title { color: var(--blue); }
+  .hljs-built_in, .hljs-type, .hljs-title, .hljs-attr { color: var(--blue); }
 
   /* composer: one field — textarea, model menu and send button share the same box */
   .composer {
@@ -290,6 +290,20 @@
   function scriptHtml(script) {
     const { value } = hljs.highlight(script, { language: "applescript" });
     return `<pre><code class="hljs language-applescript">${value}</code></pre>`;
+  }
+
+  // The accessibility-tree tool returns a JSON string (already stringified and possibly
+  // truncated). Pretty-print it if it parses, then syntax-highlight as JSON.
+  function jsonHtml(output) {
+    let text = typeof output === "string" ? output : JSON.stringify(output, null, 2);
+    if (typeof output === "string") {
+      try { text = JSON.stringify(JSON.parse(output), null, 2); } catch {}
+    }
+    if (hljs.getLanguage("json")) {
+      const { value } = hljs.highlight(text, { language: "json" });
+      return `<pre><code class="hljs language-json">${value}</code></pre>`;
+    }
+    return `<pre>${escapeHtml(text)}</pre>`;
   }
 
   function addAssistantMessage(text, isError = false) {
@@ -453,8 +467,9 @@
       setStatusScript(details, (step.input && step.input.script) || "");
     } else {
       setStatusText(details, ok ? "Read screen" : "Couldn't read screen");
-      details.querySelector(".tool-body").innerHTML =
-        `<pre>${escapeHtml(JSON.stringify(step.output ?? step.error, null, 2))}</pre>`;
+      details.querySelector(".tool-body").innerHTML = ok
+        ? jsonHtml(step.output)
+        : `<pre>${escapeHtml(String(step.error))}</pre>`;
     }
   }
 
