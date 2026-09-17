@@ -1,15 +1,17 @@
 # mac-state
 
 Experiment: drive a [use.computer](https://use.computer) macOS sandbox with AppleScript and
-watch the screen change. A one-page local tool: type what the Mac should do, Claude writes the
-AppleScript, the sandbox runs it, the screenshot refreshes. Not an agent: one prompt, one script, one run.
+watch the screen change. A one-page local tool: type what the Mac should do, and a Claude agent
+(via the Vercel AI SDK) works the task on the sandbox — inspecting the accessibility tree and
+running AppleScript through tool calls, looping until it's done — while you watch it live.
 
 ```bash
 npm start          # http://localhost:3000 — the sandbox is created on the first request
 ```
 
-The page embeds the gateway's noVNC viewer, so you watch the script run live and can click and
-type in the Mac yourself. Next to it: the generated script, stdout, stderr and the exit code.
+The page embeds the gateway's noVNC viewer, so you watch the agent work live and can click and
+type in the Mac yourself. Next to it, the chat shows each tool call as a collapsible line (the
+AppleScript it ran, or the screen it read) and the agent's final reply.
 Ctrl+C deletes the sandbox. Design and plan:
 [docs/specs](docs/specs/2026-09-14-web-app-design.md), [docs/plans](docs/plans/2026-09-14-web-app.md).
 

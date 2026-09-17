@@ -1,12 +1,13 @@
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
-import { DEFAULT_MODEL_CHOICE, isModelChoice, type Generation, type ModelChoice } from "./llm.js";
-import { runAppleScript, systemInfo, uiTreeSummary } from "./sandbox.js";
+import type { AgentResult } from "./agent.js";
+import { DEFAULT_MODEL_CHOICE, isModelChoice, type ModelChoice } from "./llm.js";
+import { runAppleScript, systemInfo } from "./sandbox.js";
 import type { SandboxSession } from "./session.js";
 
 export interface AppDeps {
   session: SandboxSession;
-  generate: (prompt: string, model: ModelChoice, screenContext?: string) => Promise<Generation>;
+  runAgent: (prompt: string, model: ModelChoice) => Promise<AgentResult>;
 }
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -22,19 +23,10 @@ function modelField(body: unknown): ModelChoice {
   return isModelChoice(value) ? value : DEFAULT_MODEL_CHOICE;
 }
 
-/** Screen context is a nice-to-have for generation, not a requirement — never let it block a run. */
-async function bestEffortScreenContext(session: SandboxSession): Promise<string | undefined> {
-  try {
-    return await session.use((s) => uiTreeSummary(s));
-  } catch {
-    return undefined;
-  }
-}
-
 /** What /api/run reports as the author when the caller sent the script itself. */
 export const RAW_SCRIPT_MODEL = "none (script sent as-is)";
 
-export function createApp({ session, generate }: AppDeps): Hono {
+export function createApp({ session, runAgent }: AppDeps): Hono {
   const app = new Hono();
 
   // The page embeds the gateway's noVNC viewer at vncUrl for a live view. The URL carries
@@ -50,42 +42,33 @@ export function createApp({ session, generate }: AppDeps): Hono {
     return c.json(info);
   });
 
-  // { prompt, model } -> Claude writes the script, without running it. Lets the UI show a real
-  // "generating" vs. "running" distinction instead of one opaque round trip.
-  app.post("/api/generate", async (c) => {
-    const body = await c.req.json().catch(() => null);
-    const prompt = textField(body, "prompt");
-    if (!prompt) return c.json({ error: "prompt is required" }, 400);
-    const screenContext = await bestEffortScreenContext(session);
-    try {
-      const generated = await generate(prompt, modelField(body), screenContext);
-      return c.json(generated);
-    } catch (err) {
-      return c.json({ error: `Claude: ${message(err)}` }, 502);
-    }
-  });
-
-  // Body is either { prompt, model } (Claude writes the script) or { script } (run it as-is).
+  // Body is either { prompt, model } (the agent inspects the screen and runs scripts until the
+  // instruction is done) or { script } (run that script once, as-is, with no model in the loop).
+  // Both return the same shape: { model, steps, reply }.
   app.post("/api/run", async (c) => {
     const body = await c.req.json().catch(() => null);
     const prompt = textField(body, "prompt");
     const script = textField(body, "script");
     if (!prompt && !script) return c.json({ error: "prompt or script is required" }, 400);
 
-    let generated: Generation;
     if (script) {
-      generated = { script, model: RAW_SCRIPT_MODEL };
-    } else {
-      try {
-        const screenContext = await bestEffortScreenContext(session);
-        generated = await generate(prompt, modelField(body), screenContext);
-      } catch (err) {
-        return c.json({ error: `Claude: ${message(err)}` }, 502);
-      }
+      const result = await session.use((s) => runAppleScript(s, script));
+      const reply =
+        result.exitCode === 0
+          ? result.stdout.trim() || "Done."
+          : result.stderr.trim() || `Script failed (exit ${result.exitCode})`;
+      return c.json({
+        model: RAW_SCRIPT_MODEL,
+        steps: [{ tool: "run_applescript", input: { script }, output: result }],
+        reply,
+      });
     }
 
-    const result = await session.use((s) => runAppleScript(s, generated.script));
-    return c.json({ ...generated, ...result });
+    try {
+      return c.json(await runAgent(prompt, modelField(body)));
+    } catch (err) {
+      return c.json({ error: `Claude: ${message(err)}` }, 502);
+    }
   });
 
   app.onError((err, c) => c.json({ error: message(err) }, 500));

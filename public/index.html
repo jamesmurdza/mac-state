@@ -397,8 +397,23 @@
     $("sysinfo-overlay").classList.add("hidden");
   }
 
-  // Two real round trips, so the status line reflects what's actually happening:
-  // Claude writes the script, then it runs on the sandbox.
+  // Render one status line per tool call the agent made. Same disclosure component either way:
+  // a run_applescript step reveals the highlighted script; a read_accessibility_tree step
+  // reveals the returned JSON (or the error, if the tool threw).
+  function fillStatusStep(details, step) {
+    const ok = !step.error;
+    if (step.tool === "run_applescript") {
+      setStatusText(details, ok ? "Ran script" : "Script failed");
+      setStatusScript(details, (step.input && step.input.script) || "");
+    } else {
+      setStatusText(details, ok ? "Read screen" : "Couldn't read screen");
+      details.querySelector(".tool-body").innerHTML =
+        `<pre>${escapeHtml(JSON.stringify(step.output ?? step.error, null, 2))}</pre>`;
+    }
+  }
+
+  // One round trip: the server runs the whole agent loop, then we render each of its tool calls
+  // as a status line, followed by the model's own final reply.
   async function send() {
     const text = $("prompt").value.trim();
     const model = $("model-select").value;
@@ -410,25 +425,20 @@
     $("send").classList.add("hidden");
     $("send").disabled = true;
 
-    const status = addStatusMessage("Generating script…");
-    let hasScript = false;
+    const pending = addStatusMessage("Working…");
 
     try {
-      const generated = await postJson("/api/generate", { prompt: text, model });
-      setStatusText(status, "Running script…");
-      setStatusScript(status, generated.script);
-      hasScript = true;
-
-      const data = await postJson("/api/run", { script: generated.script });
-      if (data.exitCode === 0) {
-        setStatusText(status, "Ran script");
-        addAssistantMessage(data.stdout.trim() || "Done.");
+      const data = await postJson("/api/run", { prompt: text, model });
+      const steps = Array.isArray(data.steps) ? data.steps : [];
+      if (steps.length) {
+        fillStatusStep(pending, steps[0]);
+        for (let i = 1; i < steps.length; i++) fillStatusStep(addStatusMessage("Working…"), steps[i]);
       } else {
-        setStatusText(status, "Script failed");
-        addAssistantMessage(data.stderr.trim() || `Script failed (exit ${data.exitCode})`, true);
+        setStatusText(pending, "Done");
       }
+      addAssistantMessage(data.reply || "Done.");
     } catch (err) {
-      setStatusText(status, hasScript ? "Script failed" : "Generation failed");
+      setStatusText(pending, "Failed");
       addAssistantMessage(err.message, true);
     } finally {
       $("send").disabled = false;
