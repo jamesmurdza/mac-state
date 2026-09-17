@@ -323,6 +323,7 @@
     wrap.appendChild(bubble);
     messages.appendChild(wrap);
     scrollToBottom();
+    return bubble;
   }
 
   function escapeHtml(s) {
@@ -363,21 +364,40 @@
     return out.join("");
   }
 
-  async function postJson(url, body) {
+  // POST to an SSE endpoint and invoke onEvent for each `data:` frame as it arrives.
+  async function streamEvents(url, body, onEvent) {
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const text = await res.text();
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      throw new Error(`Unexpected response from the server (HTTP ${res.status})`);
+    if (!res.ok || !res.body) {
+      let data;
+      try { data = JSON.parse(await res.text()); } catch {}
+      throw new Error((data && data.error) || `HTTP ${res.status}`);
     }
-    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-    return data;
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let sep;
+      while ((sep = buf.indexOf("\n\n")) !== -1) {
+        const frame = buf.slice(0, sep);
+        buf = buf.slice(sep + 2);
+        const data = frame
+          .split("\n")
+          .filter((l) => l.startsWith("data:"))
+          .map((l) => l.slice(5).replace(/^ /, ""))
+          .join("\n");
+        if (!data) continue;
+        let ev;
+        try { ev = JSON.parse(data); } catch { continue; }
+        onEvent(ev);
+      }
+    }
   }
 
   // The sandbox is created on this first request; then the gateway's noVNC viewer is embedded.
@@ -503,8 +523,21 @@
     }
   }
 
-  // One round trip: the server runs the whole agent loop, then we render each of its tool calls
-  // as a status line, followed by the model's own final reply.
+  // A tool call that has started but not yet returned. The script is shown right away so you can
+  // watch it run; the read-screen body stays empty until its result arrives.
+  function renderToolPending(details, tool, input) {
+    const body = details.querySelector(".tool-body");
+    if (tool === "run_applescript") {
+      setStatusText(details, "Running script…");
+      body.innerHTML = scriptHtml((input && input.script) || "");
+    } else {
+      setStatusText(details, "Reading screen…");
+      body.innerHTML = "";
+    }
+  }
+
+  // Stream the agent's turn: each tool call becomes a status line the moment it starts (filled in
+  // when its result arrives) and the reply types in live — everything in chronological order.
   async function send() {
     const text = $("prompt").value.trim();
     const model = $("model-select").value;
@@ -516,20 +549,56 @@
     $("send").classList.add("hidden");
     $("send").disabled = true;
 
-    const pending = addStatusMessage("Working…");
+    const tools = new Map(); // toolCallId -> { details, tool, input }
+    let thinking = addStatusMessage("Working…");
+    let reply = null; // the current assistant bubble being streamed into
+    let replyText = "";
+    let gotContent = false;
+    const clearThinking = () => { if (thinking) { thinking.remove(); thinking = null; } };
 
     try {
-      const data = await postJson("/api/run", { prompt: text, model });
-      const steps = Array.isArray(data.steps) ? data.steps : [];
-      if (steps.length) {
-        fillStatusStep(pending, steps[0]);
-        for (let i = 1; i < steps.length; i++) fillStatusStep(addStatusMessage("Working…"), steps[i]);
-      } else {
-        setStatusText(pending, "Done");
-      }
-      addAssistantMessage(data.reply || "Done.");
+      await streamEvents("/api/stream", { prompt: text, model }, (ev) => {
+        switch (ev.t) {
+          case "tool-call": {
+            gotContent = true;
+            clearThinking();
+            reply = null; replyText = ""; // a following reply starts a fresh bubble below this call
+            const details = addStatusMessage("Working…");
+            renderToolPending(details, ev.tool, ev.input);
+            tools.set(ev.id, { details, tool: ev.tool, input: ev.input });
+            break;
+          }
+          case "tool-result": {
+            const e = tools.get(ev.id);
+            if (e) fillStatusStep(e.details, { tool: e.tool, input: e.input, output: ev.output });
+            break;
+          }
+          case "tool-error": {
+            const e = tools.get(ev.id);
+            if (e) fillStatusStep(e.details, { tool: e.tool, input: e.input, error: ev.error });
+            break;
+          }
+          case "text": {
+            gotContent = true;
+            clearThinking();
+            if (!reply) reply = addAssistantMessage("");
+            replyText += ev.text;
+            reply.innerHTML = renderMarkdown(replyText);
+            scrollToBottom();
+            break;
+          }
+          case "error": {
+            gotContent = true;
+            clearThinking();
+            addAssistantMessage(ev.error, true);
+            break;
+          }
+        }
+      });
+      clearThinking();
+      if (!gotContent) addAssistantMessage("Done.");
     } catch (err) {
-      setStatusText(pending, "Failed");
+      clearThinking();
       addAssistantMessage(err.message, true);
     } finally {
       $("send").disabled = false;

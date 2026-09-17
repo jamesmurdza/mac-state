@@ -8,7 +8,11 @@ import { SandboxSession } from "../../src/session.js";
 const neverRun = async (): Promise<AgentResult> => {
   throw new Error("runAgent should not be called in these validation tests");
 };
-const app = createApp({ session: new SandboxSession(), runAgent: neverRun });
+// eslint-disable-next-line require-yield
+async function* neverStream(): AsyncGenerator<never> {
+  throw new Error("streamAgent should not be called in these validation tests");
+}
+const app = createApp({ session: new SandboxSession(), runAgent: neverRun, streamAgent: neverStream });
 
 const post = (body: string, headers: Record<string, string> = { "Content-Type": "application/json" }) =>
   app.request("/api/run", { method: "POST", headers, body });

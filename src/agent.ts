@@ -1,5 +1,5 @@
 import { anthropic } from "@ai-sdk/anthropic";
-import { generateText, stepCountIs, tool } from "ai";
+import { generateText, stepCountIs, streamText, tool } from "ai";
 import { z } from "zod";
 import { MODEL_IDS, type ModelChoice } from "./llm.js";
 import { runAppleScript, uiTreeSummary } from "./sandbox.js";
@@ -39,6 +39,29 @@ function makeTools(session: SandboxSession) {
   };
 }
 
+/**
+ * Shared request options for both the buffered (generateText) and streaming (streamText) paths.
+ *
+ * Opus's safety classifier declines "automate this Mac" prompts under the cyber category, so an
+ * Opus request opts into Anthropic's server-side fallback routing (a decline is re-run on the
+ * recommended fallback model within the same call) via the beta header and provider option.
+ */
+function agentRequest(prompt: string, modelChoice: ModelChoice, session: SandboxSession) {
+  return {
+    model: anthropic(MODEL_IDS[modelChoice]),
+    system: AGENT_SYSTEM_PROMPT,
+    prompt,
+    tools: makeTools(session),
+    stopWhen: stepCountIs(MAX_AGENT_STEPS),
+    ...(modelChoice === "opus"
+      ? {
+          headers: { "anthropic-beta": "server-side-fallback-2026-07-01" },
+          providerOptions: { anthropic: { fallbacks: "default" } },
+        }
+      : {}),
+  };
+}
+
 export type ToolName = "run_applescript" | "read_accessibility_tree";
 
 export interface AgentStep {
@@ -59,31 +82,16 @@ export interface AgentResult {
 }
 
 /**
- * Run the tool-calling agent to completion: the model may call read_accessibility_tree and
- * run_applescript repeatedly, deciding for itself when the instruction is done.
- *
- * Opus's safety classifier declines "automate this Mac" prompts under the cyber category, so an
- * Opus request opts into Anthropic's server-side fallback routing (a decline is re-run on the
- * recommended fallback model within the same call) via the beta header and provider option.
+ * Run the tool-calling agent to completion and return the whole turn at once: the model may
+ * call read_accessibility_tree and run_applescript repeatedly, deciding for itself when the
+ * instruction is done. Used by the non-streaming /api/run path.
  */
 export async function runAgent(
   prompt: string,
   modelChoice: ModelChoice,
   session: SandboxSession,
 ): Promise<AgentResult> {
-  const result = await generateText({
-    model: anthropic(MODEL_IDS[modelChoice]),
-    system: AGENT_SYSTEM_PROMPT,
-    prompt,
-    tools: makeTools(session),
-    stopWhen: stepCountIs(MAX_AGENT_STEPS),
-    ...(modelChoice === "opus"
-      ? {
-          headers: { "anthropic-beta": "server-side-fallback-2026-07-01" },
-          providerOptions: { anthropic: { fallbacks: "default" } },
-        }
-      : {}),
-  });
+  const result = await generateText(agentRequest(prompt, modelChoice, session));
 
   const steps: AgentStep[] = [];
   for (const step of result.steps) {
@@ -103,4 +111,50 @@ export async function runAgent(
   }
 
   return { model: result.response?.modelId ?? MODEL_IDS[modelChoice], steps, reply: result.text };
+}
+
+/** One event in the live agent stream, mapped from the AI SDK's fullStream parts. */
+export type AgentEvent =
+  | { t: "tool-call"; id: string; tool: ToolName; input: unknown }
+  | { t: "tool-result"; id: string; output: unknown }
+  | { t: "tool-error"; id: string; error: string }
+  | { t: "text"; text: string }
+  | { t: "error"; error: string }
+  | { t: "done" };
+
+/**
+ * Run the agent and yield events as they happen (tool calls, tool results, streamed reply
+ * text), so the UI can render the turn in real time. Errors surface as an "error" event rather
+ * than throwing, since the HTTP response has already begun streaming by the time they occur.
+ */
+export async function* streamAgent(
+  prompt: string,
+  modelChoice: ModelChoice,
+  session: SandboxSession,
+): AsyncGenerator<AgentEvent> {
+  try {
+    const result = streamText(agentRequest(prompt, modelChoice, session));
+    for await (const part of result.fullStream) {
+      switch (part.type) {
+        case "tool-call":
+          yield { t: "tool-call", id: part.toolCallId, tool: part.toolName as ToolName, input: part.input };
+          break;
+        case "tool-result":
+          yield { t: "tool-result", id: part.toolCallId, output: part.output };
+          break;
+        case "tool-error":
+          yield { t: "tool-error", id: part.toolCallId, error: String(part.error) };
+          break;
+        case "text-delta":
+          if (part.text) yield { t: "text", text: part.text };
+          break;
+        case "error":
+          yield { t: "error", error: String(part.error) };
+          break;
+      }
+    }
+  } catch (err) {
+    yield { t: "error", error: err instanceof Error ? err.message : String(err) };
+  }
+  yield { t: "done" };
 }

@@ -1,10 +1,14 @@
 import { afterAll, describe, expect, it } from "vitest";
-import { runAgent } from "../../src/agent.js";
+import { runAgent, streamAgent } from "../../src/agent.js";
 import { createApp } from "../../src/app.js";
 import { SandboxSession } from "../../src/session.js";
 
 const session = new SandboxSession();
-const app = createApp({ session, runAgent: (prompt, model) => runAgent(prompt, model, session) });
+const app = createApp({
+  session,
+  runAgent: (prompt, model) => runAgent(prompt, model, session),
+  streamAgent: (prompt, model) => streamAgent(prompt, model, session),
+});
 const post = (body: unknown) =>
   app.request("/api/run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
 

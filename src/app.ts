@@ -1,6 +1,7 @@
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
-import type { AgentResult } from "./agent.js";
+import { streamSSE } from "hono/streaming";
+import type { AgentEvent, AgentResult } from "./agent.js";
 import { DEFAULT_MODEL_CHOICE, isModelChoice, type ModelChoice } from "./llm.js";
 import { runAppleScript, systemInfo } from "./sandbox.js";
 import type { SandboxSession } from "./session.js";
@@ -8,6 +9,7 @@ import type { SandboxSession } from "./session.js";
 export interface AppDeps {
   session: SandboxSession;
   runAgent: (prompt: string, model: ModelChoice) => Promise<AgentResult>;
+  streamAgent: (prompt: string, model: ModelChoice) => AsyncIterable<AgentEvent>;
 }
 
 const message = (err: unknown) => (err instanceof Error ? err.message : String(err));
@@ -26,7 +28,7 @@ function modelField(body: unknown): ModelChoice {
 /** What /api/run reports as the author when the caller sent the script itself. */
 export const RAW_SCRIPT_MODEL = "none (script sent as-is)";
 
-export function createApp({ session, runAgent }: AppDeps): Hono {
+export function createApp({ session, runAgent, streamAgent }: AppDeps): Hono {
   const app = new Hono();
 
   // The page embeds the gateway's noVNC viewer at vncUrl for a live view. The URL carries
@@ -69,6 +71,22 @@ export function createApp({ session, runAgent }: AppDeps): Hono {
     } catch (err) {
       return c.json({ error: `Claude: ${message(err)}` }, 502);
     }
+  });
+
+  // Live version of the agent path: runs the loop and streams each tool call, tool result and
+  // chunk of the final reply as an SSE event, so the UI renders the turn in real time. The
+  // response begins as soon as the model does, so failures arrive as an "error" event, not a
+  // non-200 status. (The raw { script } path stays on /api/run — there's no loop to stream.)
+  app.post("/api/stream", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const prompt = textField(body, "prompt");
+    if (!prompt) return c.json({ error: "prompt is required" }, 400);
+    const model = modelField(body);
+    return streamSSE(c, async (stream) => {
+      for await (const event of streamAgent(prompt, model)) {
+        await stream.writeSSE({ data: JSON.stringify(event) });
+      }
+    });
   });
 
   app.onError((err, c) => c.json({ error: message(err) }, 500));
