@@ -1,5 +1,5 @@
 import { anthropic } from "@ai-sdk/anthropic";
-import { generateText, stepCountIs, streamText, tool } from "ai";
+import { generateText, type ModelMessage, stepCountIs, streamText, tool } from "ai";
 import { z } from "zod";
 import { MODEL_IDS, type ModelChoice } from "./llm.js";
 import { runAppleScript, uiTreeSummary } from "./sandbox.js";
@@ -57,11 +57,11 @@ function makeTools(session: SandboxSession) {
  * Opus request opts into Anthropic's server-side fallback routing (a decline is re-run on the
  * recommended fallback model within the same call) via the beta header and provider option.
  */
-function agentRequest(prompt: string, modelChoice: ModelChoice, session: SandboxSession) {
+function agentRequest(messages: ModelMessage[], modelChoice: ModelChoice, session: SandboxSession) {
   return {
     model: anthropic(MODEL_IDS[modelChoice]),
     system: AGENT_SYSTEM_PROMPT,
-    prompt,
+    messages,
     tools: makeTools(session),
     stopWhen: stepCountIs(MAX_AGENT_STEPS),
     ...(modelChoice === "opus"
@@ -96,13 +96,19 @@ export interface AgentResult {
  * Run the tool-calling agent to completion and return the whole turn at once: the model may
  * call read_accessibility_tree and run_applescript repeatedly, deciding for itself when the
  * instruction is done. Used by the non-streaming /api/run path.
+ *
+ * `history` is the running conversation. The new user turn and the model's response messages are
+ * committed to it on success, so later turns see the full prior context.
  */
 export async function runAgent(
   prompt: string,
   modelChoice: ModelChoice,
   session: SandboxSession,
+  history: ModelMessage[] = [],
 ): Promise<AgentResult> {
-  const result = await generateText(agentRequest(prompt, modelChoice, session));
+  const messages: ModelMessage[] = [...history, { role: "user", content: prompt }];
+  const result = await generateText(agentRequest(messages, modelChoice, session));
+  history.splice(0, history.length, ...messages, ...result.responseMessages);
 
   const steps: AgentStep[] = [];
   for (const step of result.steps) {
@@ -137,14 +143,20 @@ export type AgentEvent =
  * Run the agent and yield events as they happen (tool calls, tool results, streamed reply
  * text), so the UI can render the turn in real time. Errors surface as an "error" event rather
  * than throwing, since the HTTP response has already begun streaming by the time they occur.
+ *
+ * `history` is the running conversation. The new user turn and the model's response messages are
+ * committed to it only on a clean finish, so a failed turn doesn't leave a dangling user message.
  */
 export async function* streamAgent(
   prompt: string,
   modelChoice: ModelChoice,
   session: SandboxSession,
+  history: ModelMessage[] = [],
 ): AsyncGenerator<AgentEvent> {
+  const messages: ModelMessage[] = [...history, { role: "user", content: prompt }];
+  let errored = false;
   try {
-    const result = streamText(agentRequest(prompt, modelChoice, session));
+    const result = streamText(agentRequest(messages, modelChoice, session));
     for await (const part of result.fullStream) {
       switch (part.type) {
         case "tool-call":
@@ -160,9 +172,14 @@ export async function* streamAgent(
           if (part.text) yield { t: "text", text: part.text };
           break;
         case "error":
+          errored = true;
           yield { t: "error", error: String(part.error) };
           break;
       }
+    }
+    if (!errored) {
+      const responseMessages = await result.responseMessages;
+      history.splice(0, history.length, ...messages, ...responseMessages);
     }
   } catch (err) {
     yield { t: "error", error: err instanceof Error ? err.message : String(err) };
