@@ -152,6 +152,15 @@
     margin-top: 4px; background: var(--panel-2); border-radius: 8px; padding: 10px 12px;
   }
   .tool-body pre { margin: 0; white-space: pre; overflow-x: auto; tab-size: 4; font-size: 12px; font-family: var(--mono); }
+  .tool-body .stream { margin-top: 8px; }
+  .tool-body .stream-label {
+    display: block; margin-bottom: 3px; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3);
+  }
+  .tool-body .stream.stderr .stream-label, .tool-body .stream.error .stream-label { color: var(--red); }
+  .tool-body .stream pre { color: var(--ink-2); }
+  .tool-body .exit { margin-top: 8px; font-size: 11px; }
+  .tool-body .exit.ok { color: var(--green); }
+  .tool-body .exit.bad { color: var(--red); }
 
   /* AppleScript highlighting */
   .hljs-keyword { color: var(--accent); }
@@ -270,10 +279,6 @@
 
   function setStatusText(details, text) {
     details.querySelector(".status-text").textContent = text;
-  }
-
-  function setStatusScript(details, script) {
-    details.querySelector(".tool-body").innerHTML = scriptHtml(script);
   }
 
   function addUserMessage(text) {
@@ -457,19 +462,44 @@
     $("sysinfo-overlay").classList.add("hidden");
   }
 
+  function streamHtml(kind, text) {
+    return `<div class="stream ${kind}"><span class="stream-label">${escapeHtml(kind)}</span><pre>${escapeHtml(text)}</pre></div>`;
+  }
+
+  // stdout, stderr and the exit code from a run_applescript step's ExecResult, each shown only
+  // when there's something to show.
+  function execHtml(output) {
+    if (!output || typeof output !== "object") return "";
+    const parts = [];
+    const stdout = (output.stdout || "").trim();
+    const stderr = (output.stderr || "").trim();
+    if (stdout) parts.push(streamHtml("stdout", stdout));
+    if (stderr) parts.push(streamHtml("stderr", stderr));
+    if (typeof output.exitCode === "number") {
+      parts.push(`<div class="exit ${output.exitCode === 0 ? "ok" : "bad"}">exit ${output.exitCode}</div>`);
+    }
+    return parts.join("");
+  }
+
   // Render one status line per tool call the agent made. Same disclosure component either way:
-  // a run_applescript step reveals the highlighted script; a read_accessibility_tree step
-  // reveals the returned JSON (or the error, if the tool threw).
+  // a run_applescript step reveals the script and its output; a read_accessibility_tree step
+  // reveals the returned JSON. Either can also carry a tool-execution error.
   function fillStatusStep(details, step) {
-    const ok = !step.error;
+    const body = details.querySelector(".tool-body");
     if (step.tool === "run_applescript") {
-      setStatusText(details, ok ? "Ran script" : "Script failed");
-      setStatusScript(details, (step.input && step.input.script) || "");
+      const script = (step.input && step.input.script) || "";
+      if (step.error) {
+        setStatusText(details, "Script failed");
+        body.innerHTML = scriptHtml(script) + streamHtml("error", String(step.error));
+      } else {
+        const failed = step.output && step.output.exitCode !== 0;
+        setStatusText(details, failed ? "Script failed" : "Ran script");
+        body.innerHTML = scriptHtml(script) + execHtml(step.output);
+      }
     } else {
+      const ok = !step.error;
       setStatusText(details, ok ? "Read screen" : "Couldn't read screen");
-      details.querySelector(".tool-body").innerHTML = ok
-        ? jsonHtml(step.output)
-        : `<pre>${escapeHtml(String(step.error))}</pre>`;
+      body.innerHTML = ok ? jsonHtml(step.output) : `<pre>${escapeHtml(String(step.error))}</pre>`;
     }
   }
 
