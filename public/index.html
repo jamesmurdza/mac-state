@@ -157,7 +157,7 @@
   .tool-body > pre { padding: 10px 12px; }
   /* the output half (stdout/stderr/exit): distinct background, no labels, uniform font */
   .tool-body .output {
-    padding: 10px 12px; background: var(--panel); border-top: 1px solid var(--line-2);
+    padding: 10px 12px; background: color-mix(in srgb, var(--panel-2) 72%, var(--panel));
     display: flex; flex-direction: column; gap: 6px;
   }
   .tool-body .output pre, .tool-body .output .exit { color: var(--ink-2); font-size: 12px; font-family: var(--mono); }
