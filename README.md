@@ -6,6 +6,8 @@ keys until it's done — while you watch a live view of the Mac next to the chat
 
 ## Features
 
+- Built on the [Vercel AI SDK](https://sdk.vercel.ai/), giving access to
+  [100+ models](https://ai-sdk.dev/providers/ai-sdk-providers) across every major provider
 - Drives a real macOS sandbox via mouse, keyboard, and app launching — no shell or scripting shortcuts
 - Sees the screen through macOS's accessibility API — no screenshots, no vision model, just a
   JSON tree of on-screen elements
@@ -13,8 +15,6 @@ keys until it's done — while you watch a live view of the Mac next to the chat
 - Streams tool calls, results, and replies live as the agent works
 - Stateless server: sandboxes are created automatically and self-delete after a couple minutes of
   inactivity, and conversation history lives in the browser, not the server
-- Built on the [Vercel AI SDK](https://sdk.vercel.ai/), giving access to
-  [100+ models](https://ai-sdk.dev/providers/ai-sdk-providers) across every major provider
 
 ## How the agent works
 
