@@ -4,8 +4,44 @@ A Next.js app that drives a real macOS sandbox ([use.computer](https://use.compu
 Claude agent. Type an instruction, and the agent looks at the screen, clicks, types, and presses
 keys until it's done — while you watch a live view of the Mac next to the chat.
 
-The app is stateless: the server holds no state between requests. Sandboxes are created
-automatically and self-delete after a couple of minutes of inactivity.
+## Features
+
+- Drives a real macOS sandbox via mouse, keyboard, and app launching — no shell or scripting shortcuts
+- Live view of the sandbox's screen next to the chat
+- Streams tool calls, results, and replies live as the agent works
+- Stateless server: sandboxes are created automatically and self-delete after a couple minutes of
+  inactivity, and conversation history lives in the browser, not the server
+- Built on the [Vercel AI SDK](https://sdk.vercel.ai/), so swapping in a different model or
+  provider is a one-line change
+
+## How the agent works
+
+The agent drives the sandbox purely through its GUI, the way a person would. Claude is given five
+tools, all bound to the current sandbox:
+
+- `read_accessibility_tree` — a pruned JSON summary of what's on screen
+- `open_app` — launch or focus an app and wait for its window
+- `click_element` — click something on screen
+- `type_text` — type text
+- `press_keys` — press a key or a hotkey combo
+
+The system prompt steers it through a simple loop — **look, act, look** — and most action tools
+return the updated screen right after acting, so the model rarely needs a separate read in
+between. A turn runs for up to 40 tool-calling steps before it's cut off as a runaway guard.
+
+## LLM support
+
+The agent talks to the model through the [Vercel AI SDK](https://sdk.vercel.ai/), so it isn't
+locked to one provider. Today it's wired to Anthropic:
+
+```ts
+// src/lib/agent.ts
+model: anthropic(MODEL_IDS[modelChoice]),
+```
+
+The model dropdown in the UI picks between Claude Opus, Sonnet, and Haiku (`src/lib/llm.ts`). To
+use a different provider, install its AI SDK package (e.g. `@ai-sdk/openai`) and swap the
+`model:` line above — the tool-calling loop itself doesn't change.
 
 ## Requirements
 
@@ -64,28 +100,3 @@ src/lib/             Sandbox handling, the agent loop, and other shared logic
 tests/               Unit, integration, and end-to-end tests
 tools/               Dev scripts
 ```
-
-## How the agent works
-
-The agent loop lives in `src/lib/agent.ts` and drives the sandbox purely through its GUI, the way
-a person would — there's no shell or scripting shortcut available to it. Claude (via the Vercel AI
-SDK) is given five tools bound to the current sandbox: `read_accessibility_tree` (a pruned JSON
-summary of what's on screen), `open_app`, `click_element`, `type_text`, and `press_keys`. The
-system prompt steers it through a simple loop — **look, act, look** — and most action tools return
-the updated screen right after acting, so the model rarely needs a separate read in between. A
-turn runs for up to 40 tool-calling steps before it's cut off as a runaway guard.
-
-`streamAgent` runs that loop and yields each tool call, result, and reply chunk as it happens. It
-backs `POST /api/stream`, the only route the page's chat UI calls, over a hand-rolled SSE protocol
-the client parses with a plain `fetch()` + `ReadableStream` reader — no `EventSource`, no `useChat`.
-
-Because the app is stateless, `streamAgent` doesn't own a sandbox or a conversation the way a
-typical chat backend would. Each call takes a `SandboxRef` (a small mutable box holding the current
-sandbox handle) and the full prior `history` as plain arguments; every tool call goes through
-`withSandbox()`, which retries once against a freshly created sandbox if the gateway reports the
-current one gone (timed out or otherwise deleted) — reconnecting is cheap because
-`attachSandbox(sandboxId)` rebuilds a working handle from just the id, with no network call, since
-the gateway's own API only ever needs the id in the URL path. Every event the agent emits carries
-the sandbox it's currently using and, once done, the full updated conversation, so the client (the
-only place any of this is actually remembered) can just replace its local copy wholesale rather
-than track diffs.
