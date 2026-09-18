@@ -2,7 +2,7 @@
 
 A Next.js app that drives a real macOS sandbox ([use.computer](https://use.computer)) with a
 Claude agent. Type an instruction, and the agent reads the screen, then clicks, types, and presses
-keys until it's done — while you watch a live view of the Mac next to the chat.
+keys until it's done.
 
 ## Features
 
