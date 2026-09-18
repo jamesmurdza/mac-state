@@ -4,6 +4,8 @@ A Next.js app that drives a real macOS sandbox ([use.computer](https://use.compu
 Claude agent. Type an instruction, and the agent reads the screen, then clicks, types, and presses
 keys until it's done.
 
+https://github.com/user-attachments/assets/18f4f71f-090d-4172-8bbb-d9f7a57ad7d6
+
 ## Features
 
 - Built on the [Vercel AI SDK](https://sdk.vercel.ai/), giving access to
