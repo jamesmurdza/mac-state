@@ -2,7 +2,7 @@ import type { ToolName } from "./agent";
 
 export interface ToolCallEntry {
   id: string;
-  tool: ToolName | "run_applescript";
+  tool: ToolName;
   input: unknown;
   output?: unknown;
   error?: string;

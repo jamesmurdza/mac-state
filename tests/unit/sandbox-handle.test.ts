@@ -39,7 +39,6 @@ describe("withSandbox", () => {
   it("recreates the sandbox and retries once when fn reports the sandbox is gone", async () => {
     const ref: SandboxRef = { current: fakeHandle("sb-1") };
     const create = vi.fn(async () => fakeHandle("sb-2"));
-    const onRotate = vi.fn();
     let calls = 0;
     const fn = vi.fn(async (s: SandboxHandle) => {
       calls++;
@@ -47,13 +46,14 @@ describe("withSandbox", () => {
       return s.sandboxId;
     });
 
-    const result = await withSandbox(ref, fn, { create, onRotate });
+    const result = await withSandbox(ref, fn, { create });
 
     expect(result).toBe("sb-2");
+    // ref.current is the single source of truth for "which sandbox did this end up using" --
+    // there's no separate onRotate callback to assert on; a caller that needs to know just reads
+    // ref.current (e.g. via toDescriptor()) after withSandbox resolves.
     expect(ref.current.sandboxId).toBe("sb-2");
     expect(create).toHaveBeenCalledOnce();
-    expect(onRotate).toHaveBeenCalledOnce();
-    expect(onRotate).toHaveBeenCalledWith(ref.current);
     expect(fn).toHaveBeenCalledTimes(2);
   });
 

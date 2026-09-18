@@ -1,5 +1,5 @@
 import { anthropic } from "@ai-sdk/anthropic";
-import { generateText, type ModelMessage, stepCountIs, streamText, tool } from "ai";
+import { type ModelMessage, stepCountIs, streamText, tool } from "ai";
 import { z } from "zod";
 import { MODEL_IDS, type ModelChoice } from "./llm";
 import { clickElement, openApp, pressKeys, typeText, uiTreeSummary } from "./sandbox";
@@ -28,12 +28,12 @@ Keep going, one step at a time, until the instruction is FULLY done — includin
 
 /**
  * The tools the model can call, each bound to a per-request `SandboxRef`. A tool call that hits a
- * "gone" sandbox (timed out mid-turn) transparently gets a fresh one via `withSandbox`; `onRotate`
- * (when given) is notified synchronously at the moment that happens, so a streaming caller can
- * surface it to the client before the tool's own result.
+ * "gone" sandbox (timed out mid-turn) transparently gets a fresh one via `withSandbox`; every
+ * `AgentEvent` streamAgent() yields after this carries `toDescriptor(ref.current)`, so a rotation
+ * here shows up in the very next event without any separate notification path.
  */
-function makeTools(ref: SandboxRef, onRotate?: (handle: SandboxHandle) => void) {
-  const run = <T,>(fn: (sandbox: SandboxHandle) => Promise<T>) => withSandbox(ref, fn, { onRotate });
+function makeTools(ref: SandboxRef) {
+  const run = <T,>(fn: (sandbox: SandboxHandle) => Promise<T>) => withSandbox(ref, fn);
   return {
     read_accessibility_tree: tool({
       description:
@@ -119,16 +119,7 @@ export type ToolName =
   | "type_text"
   | "press_keys";
 
-export interface AgentStep {
-  tool: ToolName;
-  input: unknown;
-  /** ExecResult for run_applescript, the uiTreeSummary JSON string for read_accessibility_tree. */
-  output?: unknown;
-  /** Set when the tool's execute threw (the AI SDK feeds this back to the model as a tool-error). */
-  error?: string;
-}
-
-/** Request-scoped input shared by runAgent and streamAgent — no server-held singletons. */
+/** Request-scoped input for streamAgent — no server-held singletons. */
 export interface AgentTurnInput {
   prompt: string;
   modelChoice: ModelChoice;
@@ -136,76 +127,30 @@ export interface AgentTurnInput {
   sandboxRef: SandboxRef;
   /** The prior conversation, supplied by the caller (the client, in this stateless design). Never mutated. */
   history: ModelMessage[];
-  /** streamAgent only: aborts the model call (Stop button / client disconnect). */
+  /** Aborts the model call (Stop button / client disconnect). */
   signal?: AbortSignal;
 }
 
-export interface AgentResult {
-  /** The model (or server-side fallback) that actually answered. */
-  model: string;
-  steps: AgentStep[];
-  /** The model's final text once it stops calling tools. */
-  reply: string;
-  /** The full updated conversation — the caller's job is just to hold onto this for the next turn. */
-  history: ModelMessage[];
-  /** Whatever sandbox this turn ended up using (possibly a fresh one, if the original timed out). */
-  sandbox: SandboxDescriptor;
-}
-
 /**
- * Run the tool-calling agent to completion and return the whole turn at once: the model may
- * call the GUI tools repeatedly, deciding for itself when the instruction is done. Used by the
- * non-streaming /api/run path.
+ * One event in the live agent stream, mapped from the AI SDK's fullStream parts. Every variant
+ * carries `sandbox`: the descriptor of whatever handle `sandboxRef.current` points to *right now*,
+ * not just on a rotation. This used to be a dedicated `{t:"sandbox"}` event emitted only when a
+ * tool call found its sandbox gone and recreated it -- but the route resolves/creates a sandbox
+ * before streamAgent even starts, so a turn that made no tool calls at all (a plain "hi") had no
+ * event to carry that initial sandbox back to the client, which then kept resending a stale/empty
+ * descriptor and silently created a fresh sandbox on every later turn too. Putting `sandbox` on
+ * every event closes that gap by construction: there's no event type a client can forget to sync
+ * from, and no separate rotation-tracking machinery needed here to get the ordering right --
+ * whatever `sandboxRef.current` is *at yield time* is correct by definition.
  */
-export async function runAgent(input: AgentTurnInput): Promise<AgentResult> {
-  const { prompt, modelChoice, sandboxRef, history } = input;
-  const messages: ModelMessage[] = [...history, { role: "user", content: prompt }];
-  const result = await generateText(agentRequest(messages, modelChoice, makeTools(sandboxRef)));
-
-  const steps: AgentStep[] = [];
-  for (const step of result.steps) {
-    for (const part of step.content) {
-      if (part.type !== "tool-call") continue;
-      const outcome = step.content.find(
-        (p) =>
-          (p.type === "tool-result" || p.type === "tool-error") && p.toolCallId === part.toolCallId,
-      );
-      steps.push({
-        tool: part.toolName as ToolName,
-        input: part.input,
-        output: outcome?.type === "tool-result" ? outcome.output : undefined,
-        error: outcome?.type === "tool-error" ? String(outcome.error) : undefined,
-      });
-    }
-  }
-
-  return {
-    model: result.response?.modelId ?? MODEL_IDS[modelChoice],
-    steps,
-    reply: result.text,
-    history: [...messages, ...result.responseMessages],
-    sandbox: toDescriptor(sandboxRef.current),
-  };
-}
-
-/** One event in the live agent stream, mapped from the AI SDK's fullStream parts. */
 export type AgentEvent =
-  | { t: "tool-call"; id: string; tool: ToolName; input: unknown }
-  | { t: "tool-result"; id: string; output: unknown }
-  | { t: "tool-error"; id: string; error: string }
-  | { t: "text"; text: string }
-  /** The sandbox this turn is using changed (it timed out and a fresh one was created mid-turn).
-   *  Emitted before the tool-call's own tool-result/tool-error, so a client updates its VNC view
-   *  and remembered descriptor causally before seeing the result that came from the new sandbox. */
-  | { t: "sandbox"; sandboxId: string; host: string; vncUrl: string }
-  | { t: "error"; error: string }
+  | { t: "tool-call"; id: string; tool: ToolName; input: unknown; sandbox: SandboxDescriptor }
+  | { t: "tool-result"; id: string; output: unknown; sandbox: SandboxDescriptor }
+  | { t: "tool-error"; id: string; error: string; sandbox: SandboxDescriptor }
+  | { t: "text"; text: string; sandbox: SandboxDescriptor }
+  | { t: "error"; error: string; sandbox: SandboxDescriptor }
   /** `history` is the full updated conversation on a clean finish, or the caller's original
-   *  `input.history` unchanged if the turn was aborted/errored before finishing cleanly. `sandbox`
-   *  is *always* the sandbox this turn actually used -- not just on a mid-turn rotation. This is
-   *  what lets the client learn about a sandbox the route created from scratch (no descriptor was
-   *  sent, or the sandbox needed replacing) even when the turn made no tool calls at all: without
-   *  it, a turn with pure text output (e.g. "hi") would silently strand the client on a stale/null
-   *  descriptor, so *every* later turn re-creates yet another sandbox instead of reusing this one. */
+   *  `input.history` unchanged if the turn was aborted/errored before finishing cleanly. */
   | { t: "done"; history: ModelMessage[]; sandbox: SandboxDescriptor };
 
 /**
@@ -221,15 +166,11 @@ export type AgentEvent =
 export async function* streamAgent(input: AgentTurnInput): AsyncGenerator<AgentEvent> {
   const { prompt, modelChoice, sandboxRef, history, signal } = input;
   const messages: ModelMessage[] = [...history, { role: "user", content: prompt }];
-  const rotations: SandboxDescriptor[] = [];
-  const tools = makeTools(sandboxRef, (handle) => rotations.push(toDescriptor(handle)));
-
-  function* drainRotations(): Generator<AgentEvent> {
-    while (rotations.length) {
-      const d = rotations.shift()!;
-      yield { t: "sandbox", sandboxId: d.sandboxId, host: d.host, vncUrl: d.vncUrl };
-    }
-  }
+  const tools = makeTools(sandboxRef);
+  // Read fresh at each yield, not cached: this is what makes every event carry the *current*
+  // sandbox with no explicit rotation-tracking -- if a tool's execute() just swapped
+  // sandboxRef.current, the very next line reads the new one.
+  const sandbox = () => toDescriptor(sandboxRef.current);
 
   let clean = true;
   let finalHistory = history;
@@ -238,25 +179,23 @@ export async function* streamAgent(input: AgentTurnInput): AsyncGenerator<AgentE
     for await (const part of result.fullStream) {
       switch (part.type) {
         case "tool-call":
-          yield { t: "tool-call", id: part.toolCallId, tool: part.toolName as ToolName, input: part.input };
+          yield { t: "tool-call", id: part.toolCallId, tool: part.toolName as ToolName, input: part.input, sandbox: sandbox() };
           break;
         case "tool-result":
-          yield* drainRotations();
-          yield { t: "tool-result", id: part.toolCallId, output: part.output };
+          yield { t: "tool-result", id: part.toolCallId, output: part.output, sandbox: sandbox() };
           break;
         case "tool-error":
-          yield* drainRotations();
-          yield { t: "tool-error", id: part.toolCallId, error: String(part.error) };
+          yield { t: "tool-error", id: part.toolCallId, error: String(part.error), sandbox: sandbox() };
           break;
         case "text-delta":
-          if (part.text) yield { t: "text", text: part.text };
+          if (part.text) yield { t: "text", text: part.text, sandbox: sandbox() };
           break;
         case "abort":
           clean = false;
           break;
         case "error":
           clean = false;
-          yield { t: "error", error: String(part.error) };
+          yield { t: "error", error: String(part.error), sandbox: sandbox() };
           break;
       }
     }
@@ -267,8 +206,7 @@ export async function* streamAgent(input: AgentTurnInput): AsyncGenerator<AgentE
   } catch (err) {
     // An aborted stream throws AbortError — expected when the user hits Stop, not a real error.
     const aborted = signal?.aborted || (err instanceof Error && err.name === "AbortError");
-    if (!aborted) yield { t: "error", error: err instanceof Error ? err.message : String(err) };
+    if (!aborted) yield { t: "error", error: err instanceof Error ? err.message : String(err), sandbox: sandbox() };
   }
-  yield* drainRotations();
-  yield { t: "done", history: finalHistory, sandbox: toDescriptor(sandboxRef.current) };
+  yield { t: "done", history: finalHistory, sandbox: sandbox() };
 }

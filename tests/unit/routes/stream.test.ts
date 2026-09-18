@@ -36,19 +36,23 @@ describe("POST /api/stream", () => {
     expect(resolveSandbox).not.toHaveBeenCalled();
   });
 
-  it("streams SSE frames with the right content type, in order, including additive sandbox/done.history frames", async () => {
+  it("streams SSE frames with the right content type, in order, every frame carrying the current sandbox", async () => {
     vi.mocked(resolveSandbox).mockReset();
     vi.mocked(streamAgent).mockReset();
     const handle = fakeHandle("sb-1");
     vi.mocked(resolveSandbox).mockResolvedValue({ handle, descriptor: toDescriptor(handle) });
     const history = [{ role: "user" as const, content: "open TextEdit" }];
+    const sb1 = { sandboxId: "sb-1", host: "mm001", vncUrl: "https://gw/vnc?sandbox=sb-1" };
+    // A rotation mid-turn (the tool call found sb-1 gone and streamAgent transparently recreated
+    // it) now shows up as a plain change in the `sandbox` field between events -- no dedicated
+    // event type needed to carry it.
+    const sb2 = { sandboxId: "sb-2", host: "mm002", vncUrl: "https://gw/vnc?sandbox=sb-2" };
     vi.mocked(streamAgent).mockReturnValue(
       eventsOf([
-        { t: "tool-call", id: "1", tool: "open_app", input: { app: "TextEdit" } },
-        { t: "sandbox", sandboxId: "sb-2", host: "mm002", vncUrl: "https://gw/vnc?sandbox=sb-2" },
-        { t: "tool-result", id: "1", output: { status: "ok" } },
-        { t: "text", text: "Done." },
-        { t: "done", history, sandbox: { sandboxId: "sb-2", host: "mm002", vncUrl: "https://gw/vnc?sandbox=sb-2" } },
+        { t: "tool-call", id: "1", tool: "open_app", input: { app: "TextEdit" }, sandbox: sb1 },
+        { t: "tool-result", id: "1", output: { status: "ok" }, sandbox: sb2 },
+        { t: "text", text: "Done.", sandbox: sb2 },
+        { t: "done", history, sandbox: sb2 },
       ]),
     );
 
@@ -59,8 +63,10 @@ describe("POST /api/stream", () => {
     expect(res.headers.get("Content-Type")).toBe("text/event-stream");
 
     const frames = await readFrames(res);
-    expect(frames.map((f) => f.t)).toEqual(["tool-call", "sandbox", "tool-result", "text", "done"]);
-    expect(frames[4]).toEqual({ t: "done", history, sandbox: { sandboxId: "sb-2", host: "mm002", vncUrl: "https://gw/vnc?sandbox=sb-2" } });
+    expect(frames.map((f) => f.t)).toEqual(["tool-call", "tool-result", "text", "done"]);
+    expect(frames[0]).toMatchObject({ sandbox: sb1 });
+    expect(frames[1]).toMatchObject({ sandbox: sb2 });
+    expect(frames[3]).toEqual({ t: "done", history, sandbox: sb2 });
   });
 
   it("returns 500 when the sandbox can't be resolved before the stream opens", async () => {

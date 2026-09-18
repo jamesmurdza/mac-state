@@ -2,7 +2,7 @@ import { Computer, type ExecResult, type MacOSSandbox } from "use-computer-sdk";
 import { requireEnv } from "./env";
 import type { SandboxHandle } from "./sandbox-handle";
 
-export const SCRIPT_PATH = "/tmp/mac-state.applescript";
+export const SCRIPT_PATH = "/tmp/macos-computer-use.applescript";
 const DEFAULT_BASE_URL = "https://api.use.computer";
 
 export interface ScreenshotOptions {

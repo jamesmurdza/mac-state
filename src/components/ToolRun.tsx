@@ -1,13 +1,14 @@
 "use client";
 
-import { pendingBody, stepLabel, toolBody } from "../lib/tool-render";
+import { stepLabel, toolBody } from "../lib/tool-render";
 import type { ToolCallEntry } from "../lib/transcript";
 
 function StatusDetails({ entry }: { entry: ToolCallEntry }) {
-  const label = stepLabel(entry.tool, entry.input);
-  const { html, failed } = entry.pending
-    ? { html: pendingBody(entry.tool, entry.input), failed: false }
-    : toolBody(entry.tool, entry.input, entry.output, entry.error);
+  const label = stepLabel(entry.input);
+  // None of the GUI tools have anything worth showing before they return (unlike the old
+  // run_applescript step, which could preview the script while it ran) -- so a pending entry's
+  // body is just empty until its result/error arrives.
+  const { html, failed } = entry.pending ? { html: "", failed: false } : toolBody(entry.output, entry.error);
   return (
     <details className={`msg msg-status${failed ? " failed" : ""}`}>
       <summary>
@@ -31,7 +32,7 @@ export function ToolRun({ entries }: { entries: ToolCallEntry[] }) {
   return (
     <details className="msg msg-status msg-group">
       <summary>
-        <span className="status-text">{stepLabel(last.tool, last.input)}</span>
+        <span className="status-text">{stepLabel(last.input)}</span>
         <span className="chev" />
       </summary>
       <div className="group-body">

@@ -16,21 +16,19 @@ describe("sandbox-handle against a real sandbox", () => {
     }
   });
 
-  it("withSandbox recreates the sandbox and notifies onRotate once the gateway reports the old one gone", async () => {
+  it("withSandbox recreates the sandbox once the gateway reports the old one gone", async () => {
     const first = await createSandbox();
     const ref: SandboxRef = { current: first };
-    const rotations: string[] = [];
 
     await first.close(); // out-of-band deletion, as the idle reaper would do
 
-    const result = await withSandbox(ref, (s) => s.execSsh("echo again"), {
-      onRotate: (h) => rotations.push(h.sandboxId),
-    });
+    const result = await withSandbox(ref, (s) => s.execSsh("echo again"));
 
     try {
       expect(result.stdout.trim()).toBe("again");
+      // ref.current is the single source of truth for "which sandbox did this end up using" --
+      // no separate rotation-notification callback to check.
       expect(ref.current.sandboxId).not.toBe(first.sandboxId);
-      expect(rotations).toEqual([ref.current.sandboxId]);
       // The new handle is independently reconnectable by id too.
       const reattached = attachSandbox(toDescriptor(ref.current));
       expect((await reattached.execSsh("echo once more")).stdout.trim()).toBe("once more");
