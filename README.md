@@ -75,10 +75,13 @@ system prompt steers it through a simple loop — **look, act, look** — and mo
 the updated screen right after acting, so the model rarely needs a separate read in between. A
 turn runs for up to 40 tool-calling steps before it's cut off as a runaway guard.
 
-Two entry points share that same loop: `runAgent` runs it to completion and returns the whole turn
-at once (used by `POST /api/run`), and `streamAgent` yields each tool call, result, and reply chunk
-as it happens (used by `POST /api/stream`, over a hand-rolled SSE protocol the client parses with a
-plain `fetch()` + `ReadableStream` reader — no `EventSource`, no `useChat`).
+Two entry points share that same loop. `streamAgent` yields each tool call, result, and reply chunk
+as it happens; it backs `POST /api/stream`, which is the only path the page's chat UI actually
+calls, over a hand-rolled SSE protocol the client parses with a plain `fetch()` + `ReadableStream`
+reader — no `EventSource`, no `useChat`. `runAgent` runs the same loop to completion and returns
+the whole turn in one JSON response instead; it backs `POST /api/run`, a fully working route
+covered by its own tests, but nothing in the UI calls it — today it's reachable only by hitting the
+API directly (curl, a script, etc.).
 
 Because the app is stateless, neither entry point owns a sandbox or a conversation the way a
 typical chat backend would. Each call takes a `SandboxRef` (a small mutable box holding the current
