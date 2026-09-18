@@ -1,15 +1,14 @@
 # macOS Computer Use
 
 A Next.js app that drives a real macOS sandbox ([use.computer](https://use.computer)) with a
-Claude agent. Type an instruction, and the agent reads the screen through macOS's accessibility
-API (no screenshots, no vision model), then clicks, types, and presses keys until it's done —
-while you watch a live view of the Mac next to the chat.
+Claude agent. Type an instruction, and the agent reads the screen, then clicks, types, and presses
+keys until it's done — while you watch a live view of the Mac next to the chat.
 
 ## Features
 
 - Drives a real macOS sandbox via mouse, keyboard, and app launching — no shell or scripting shortcuts
-- Sees the screen through macOS's accessibility API, not screenshots — the model reads a JSON tree
-  of on-screen elements instead of an image
+- Sees the screen through macOS's accessibility API — no screenshots, no vision model, just a
+  JSON tree of on-screen elements
 - Live view of the sandbox's screen next to the chat
 - Streams tool calls, results, and replies live as the agent works
 - Stateless server: sandboxes are created automatically and self-delete after a couple minutes of
