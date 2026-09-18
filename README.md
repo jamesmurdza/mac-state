@@ -50,7 +50,7 @@ To change the model:
    model: openai(MODEL_IDS[modelChoice]),
    ```
 
-Nothing else needs to change — the tool-calling loop, tool definitions, and streaming all work the
+The rest of the code — the tool-calling loop, tool definitions, and streaming — all work the
 same regardless of provider.
 
 ## Requirements
