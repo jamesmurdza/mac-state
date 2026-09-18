@@ -18,9 +18,9 @@ keys until it's done — while you watch a live view of the Mac next to the chat
 
 ## How the agent works
 
-The agent drives the sandbox purely through its GUI, the way a person would — but it "sees" that
-GUI via macOS's accessibility API rather than a screenshot, so there's no vision model or image
-tokens involved. Claude is given five tools, all bound to the current sandbox:
+The agent drives the sandbox purely through its GUI, the way a person would. It uses helper
+functions that read and act on the screen via macOS's accessibility API. Claude is given five
+tools, all bound to the current sandbox:
 
 - `read_accessibility_tree` — a pruned JSON summary of what's on screen, read via the accessibility API
 - `open_app` — launch or focus an app and wait for its window
