@@ -5,7 +5,7 @@
 - Required env vars (put them in `.env` — Next.js loads it automatically for `npm run dev`/`build`/`start`; `tests/setup.ts` loads it the same way via Node's `process.loadEnvFile` for the test runner):
   - `USE_COMPUTER_API_KEY` — use.computer account key (`uc_live_...`)
   - `USE_COMPUTER_RESERVATION_ID` — an active Mac mini reservation; the code never reserves
-  - `ANTHROPIC_API_KEY` — Claude, for the integration and Playwright tests and the app itself
+  - `ANTHROPIC_API_KEY` — Claude, for the Playwright test and the app itself
   - `USE_COMPUTER_BASE_URL` — optional, defaults to `https://api.use.computer`
 - Database: none
 - Services: use.computer gateway (real macOS VM on the reserved Mac) and the Anthropic API. No mocks anywhere.
@@ -17,20 +17,15 @@
 Command: `npm run test:unit`
 Location: `tests/unit/` — pure functions in `tests/unit/*.test.ts`, plus route-handler tests in
 `tests/unit/routes/*.test.ts` that import each `GET`/`POST` directly from `src/app/api/*/route.ts`
-and call it with a constructed `Request` (no server, no network — `resolveSandbox`/`runAgent`/etc.
+and call it with a constructed `Request` (no server, no network — `resolveSandbox`/`streamAgent`/etc.
 are mocked via `vi.mock`).
 
-### Integration Tests (real sandbox + real Claude)
+### Integration Tests (real sandbox)
 Command: `npm run test:int`
 Location: `tests/integration/`
 - `sandbox-handle.int.test.ts` — the load-bearing test for the whole stateless design: proves
   `attachSandbox()` reconnects to an existing sandbox using nothing but its id (no host/vncUrl
-  needed), and that `withSandbox()` recreates a sandbox and fires `onRotate` after an out-of-band
-  delete.
-- `run.int.test.ts` — calls `POST /api/run`'s route handler directly: Claude writes the script (or
-  a ready-made script is run as-is), the sandbox runs it, TextEdit shows the text, `GET /api/status`
-  reports the sandbox and VNC URL. The test threads the `sandbox` descriptor each response returns
-  into the next request's body itself, since the server holds none of it between calls. About 20 s.
+  needed), and that `withSandbox()` recreates a sandbox after an out-of-band delete.
 
 ### E2E Tests (Playwright, the web page)
 Command: `npm run test:e2e:web` (needs a real sandbox + `ANTHROPIC_API_KEY` for the full agent-turn test)

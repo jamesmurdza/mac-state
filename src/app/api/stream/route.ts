@@ -5,10 +5,11 @@ import { resolveSandbox, type SandboxRef } from "../../../lib/sandbox-handle";
 export const runtime = "nodejs";
 
 /**
- * Streaming version of /api/run's prompt path via SSE, abortable (Stop button / client
- * disconnect -> AbortController). Body: `{ prompt, model, sandbox?, history? }`. The response
- * begins as soon as the model does, so failures after that point arrive as an "error" event, not
- * a non-200 status — except sandbox resolution, which happens before the stream opens.
+ * Runs a full agent turn over SSE, abortable (Stop button / client disconnect -> AbortController).
+ * Body: `{ prompt, model, sandbox?, history? }`. The response begins as soon as the model does, so
+ * failures after that point arrive as an "error" event, not a non-200 status — except sandbox
+ * resolution, which happens before the stream opens. This is the only path the page's chat UI
+ * actually calls.
  *
  * Wire format is unchanged from the original Hono `streamSSE` implementation (`data: <json>\n\n`
  * frames of the same AgentEvent union), plus two additive fields every frame now carries: `sandbox`
