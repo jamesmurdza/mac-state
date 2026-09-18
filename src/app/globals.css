@@ -1,10 +1,10 @@
   :root {
-    --bg: #f6f3ee; --panel: #ffffff; --panel-2: #efeae1;
-    --line: #e4ddd0; --line-2: #d9cfbd;
+    --bg: #f9f9f7; --panel: #ffffff; --panel-2: #f2f2f0;
+    --line: #e7e7e3; --line-2: #d8d8d3;
     --ink: #211b12; --ink-2: #6e6455; --ink-3: #a89c88;
     --accent: #0072d6; --accent-ink: #ffffff;
     --red: #b8402c; --green: #2f8f52; --blue: #2f6fb0;
-    --bubble-user: #eee5d6; --bubble-assistant: #ffffff;
+    --bubble-user: #efefec; --bubble-assistant: #ffffff;
     --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
     --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     --shadow: 0 1px 2px rgba(30, 24, 12, .06);
