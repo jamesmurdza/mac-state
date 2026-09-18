@@ -22,11 +22,16 @@ The agent drives the sandbox purely through its GUI, the way a person would. It 
 functions built on macOS's accessibility API to read the screen and perform actions. Claude is
 given five tools, all bound to the current sandbox:
 
-- `read_accessibility_tree` — a pruned JSON summary of what's on screen, read via the accessibility API
-- `open_app` — launch or focus an app and wait for its window
-- `click_element` — click something on screen
-- `type_text` — type text
-- `press_keys` — press a key or a hotkey combo
+- `read_accessibility_tree` — a pruned JSON summary of what's on screen. OS chrome (Dock,
+  Notification Center, …) is filtered out, each element gets a synthesized role and label, and the
+  result is depth- and size-capped so it stays cheap for the model to read.
+- `open_app` — launch or focus an app and wait until it actually presents a window (not a guessed
+  delay), returning the same summary as `read_accessibility_tree`.
+- `click_element` — click an on-screen element by label (works for SwiftUI apps too); returns the
+  updated screen right after.
+- `type_text` — type into whatever control currently has keyboard focus; returns the updated
+  screen right after.
+- `press_keys` — press a key or hotkey combo (e.g. `cmd+s`); returns the updated screen right after.
 
 The system prompt steers it through a simple loop — **look, act, look** — and most action tools
 return the updated screen right after acting, so the model rarely needs a separate read in
