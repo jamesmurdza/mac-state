@@ -38,8 +38,7 @@ between. A turn runs for up to 40 tool-calling steps before it's cut off as a ru
 ## LLM support
 
 The agent talks to the model through the [Vercel AI SDK](https://sdk.vercel.ai/), which supports
-[100+ models](https://ai-sdk.dev/providers/ai-sdk-providers) across every major provider — so
-you're not locked into Anthropic.
+[100+ models](https://ai-sdk.dev/providers/ai-sdk-providers) across every major provider.
 
 To change the model:
 
