@@ -101,13 +101,3 @@ npm run test:e2e:web # Playwright, drives the page against a real server
 ```
 
 See [testing.md](testing.md) for more detail.
-
-## Project structure
-
-```
-src/app/            Next.js pages and API routes
-src/components/      React UI components
-src/lib/             Sandbox handling, the agent loop, and other shared logic
-tests/               Unit, integration, and end-to-end tests
-tools/               Dev scripts
-```
