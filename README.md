@@ -61,7 +61,7 @@ same regardless of provider.
 
 - Node.js 22+
 - A [use.computer](https://use.computer) API key and an active Mac mini reservation
-- An [Anthropic](https://www.anthropic.com/) API key
+- An [Anthropic](https://www.anthropic.com/) API key (or another provider's, see [LLM support](#llm-support))
 
 ## Setup
 
