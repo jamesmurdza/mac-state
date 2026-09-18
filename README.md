@@ -14,7 +14,7 @@ keys until it's done — while you watch a live view of the Mac next to the chat
 - Live view of the sandbox's screen next to the chat
 - Streams tool calls, results, and replies live as the agent works
 - Stateless server: sandboxes are created automatically and self-delete after a couple minutes of
-  inactivity, and conversation history lives in the browser, not the server
+  inactivity
 
 ## How the agent works
 
